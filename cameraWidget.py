@@ -7,6 +7,7 @@ import cv2
 from deepface import DeepFace
 from deepface.commons import functions
 import imutils
+import numpy as np
 class CameraWidget(QtWidgets.QWidget):
     """Independent camera feed
     Uses threading to grab IP camera frames in the background
@@ -14,15 +15,17 @@ class CameraWidget(QtWidgets.QWidget):
     @param width - Width of the video frame
     @param height - Height of the video frame
     @param stream_link - IP/RTSP/Webcam link
-    @param aspect_ratio - Whether to maintain frame aspect ratio or force into fraame
+    @param detector_backend (string): set face detector backend to opencv, retinaface, mtcnn, ssd, dlib, mediapipe or yolov8.
     """
 
-    def __init__(self, width, height, faces, stream_link=0, aspect_ratio=False, parent=None, deque_size=1):
+    def __init__(self, width, height, faces, stream_link=0, aspect_ratio=False, parent=None, deque_size=1, face_detector="retinaface", face_confidence_threshold=0.99):
         super(CameraWidget, self).__init__(parent)
         
         # Initialize deque used to store frames read from the stream
         self.deque = deque(maxlen=deque_size)
         self.faces = faces
+        self.detector_backend = face_detector
+        self.face_confidence = face_confidence_threshold
         self.face_last = deque(maxlen=2)
         # Slight offset is needed since PyQt layouts have a built in padding
         # So add offset to counter the padding 
@@ -97,10 +100,14 @@ class CameraWidget(QtWidgets.QWidget):
                     self.spin(2)
             except AttributeError:
                 pass
+    def detected_face_to_cv_face(self, face):
+        face_detect = face.copy()# imutils.resize(face, width=150)
+        a  = cv2.cvtColor(face_detect, cv2.COLOR_BGR2RGB)
+        return np.interp(a, (a.min(), a.max()), (0, 255)).astype(np.uint8)
+    
     def detect_face(self):
         """get face from frame"""
         model_name = "VGG-Face"
-        detector_backend = "opencv"
         # build models once to store them in the memory
         # otherwise, they will be built after cam started and this will cause delays
         DeepFace.build_model(model_name=model_name)
@@ -108,11 +115,11 @@ class CameraWidget(QtWidgets.QWidget):
         while True:
             if len(self.deque) > 0:                
                 try:
-                    frame = self.deque[-1]
+                    frame = (self.deque[-1]).copy()
                     face_objs = DeepFace.extract_faces(
                         img_path=frame,
                         target_size=target_size,
-                        detector_backend=detector_backend,
+                        detector_backend=self.detector_backend,
                         enforce_detection=False,
                         align=True
                     ) 
@@ -120,7 +127,7 @@ class CameraWidget(QtWidgets.QWidget):
                     face_bigger = None
                     for face_obj in face_objs:
                         facial_area = face_obj["facial_area"]
-                        if facial_area["w"] > 50 and face_obj["confidence"] > 0.99:
+                        if facial_area["w"] > 50 and face_obj["confidence"] > self.face_confidence:
                             if w_bigger < facial_area["w"]:
                                 w_bigger = facial_area["w"] 
                                 face_bigger = facial_area.copy()
@@ -131,7 +138,8 @@ class CameraWidget(QtWidgets.QWidget):
                         w = face_bigger["w"]
                         h = face_bigger["h"]
                         detected_face = frame[y : y + h, x : x + w]  # crop detected face
-                        item = face_bigger.copy()                        
+                        item = {"x": x, "y": y, "w": w, "h": h}
+                        item["face"] = face_bigger["face"]
                         item['detected'] = detected_face
                         self.add_face(item)
                 except Exception as e:

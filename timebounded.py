@@ -10,6 +10,7 @@ class TimeBounded:
     def add(self, key, value):
         self.cache[key] = time.time(), value
         self.cache.move_to_end(key)
+        self._clear()
 
     def get(self, key):
         self._clear()
