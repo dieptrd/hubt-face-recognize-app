@@ -178,12 +178,12 @@ class MainWindow(QMainWindow):
                     self.upssert_item(item) 
                     total = total +1
                     self.percent.append(int(total/ len(employees)*100))
+            
         except Exception as ex: 
             self.addLog(f'error: {ex}')
             pass
-        self.addLog("total import recode: ", total)
+        self.addLog(f'total import recode: {total}')
         self.addLog("===Scan End===")
-        self.btnScan.setEnabled(True)
 
     def upssert_item(self, item):
         global collection_name, uuid
