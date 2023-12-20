@@ -32,45 +32,50 @@ class MainWindow(QMainWindow):
         self.percent = deque([0], maxlen=1)
         self.logs = deque(maxlen=10)
         self.setWindowTitle("Add Images to database") 
-        layout = QFormLayout()
-        _openFolder = QPushButton(self)
-        _openFolder.setText("Select")
-        _openFolder.clicked.connect(self.selectFolder)
-
-        #Toolbar 
-        self.folder_data = ""
-        self.folder = QLineEdit("", self)
-        self.folder.setReadOnly(True) 
- 
-        layout.addRow(QLabel('Faces Image Folder:'))
-        layout.addRow(self.folder,_openFolder)
-        layout.addRow(QLabel("")) 
         
-        self.pbar = QProgressBar(self)
-        layout.addRow(self.pbar)
-
-        self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.update_UI)
-        self.timer.start(1)
         
-        self.btnScan = QPushButton(self)
-        self.btnScan.setText("Import (0 Images)")
-        self.btnScan.clicked.connect(self.scanFolder)
-        layout.addWidget(self.btnScan)
-
-        _widget_input = QWidget()
-        _widget_input.setLayout(layout)  
+        self.pbar = QProgressBar(self)    
 
         _widget_main = QWidget()
         main = QVBoxLayout(_widget_main)   
-        main.addWidget(self._initWidgetDatabase())
-        main.addWidget(_widget_input)
+        main.addWidget(self._initWidgetDatabase()) 
+        main.addWidget(self._initWidgetFolder())
+        main.addWidget(self.pbar)
+        main.addWidget(self._initAction())
         main.addWidget(self._initWidgetLog()) 
 
         self.setLayout(main) 
         self.setCentralWidget(_widget_main)
         #recalculate
-        self.updateFolder("./data")
+        self.updateFolder("./data")  
+
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.update_UI)
+        self.timer.start(1)
+
+    def _initAction(self):
+        _widget = QWidget()
+        _widget.setLayout(QHBoxLayout())
+        _widget.layout().addWidget(QLabel(""))
+        self.btnScan = QPushButton(self)
+        self.btnScan.setText("Import (0 Images)")
+        self.btnScan.clicked.connect(self.scanFolder)
+        _widget.layout().addWidget(self.btnScan)
+        return _widget
+    
+    def _initWidgetFolder(self):
+        _openFolder = QPushButton(self)
+        _openFolder.setText("...")
+        _openFolder.clicked.connect(self.selectFolder)
+        self.folder = QLineEdit("", self)
+        self.folder.setReadOnly(True) 
+        
+        _widget = QWidget()
+        _widget.setLayout(QHBoxLayout())
+        _widget.layout().addWidget(QLabel("Faces Image's Folder:"))
+        _widget.layout().addWidget(self.folder)
+        _widget.layout().addWidget(_openFolder)
+        return _widget
 
     def _initWidgetDatabase(self):
         _widget = QWidget()
@@ -107,8 +112,7 @@ class MainWindow(QMainWindow):
             print('Selected Folders:', selected_folders)
             self.updateFolder(selected_folders[0])
     def updateFolder(self, folder): 
-        self.addLog("Folder data changed.")
-        self.folder_data = folder
+        self.addLog("Folder data changed.") 
         self.folder.setText(folder)
         self.countImages(folder)
 
@@ -123,7 +127,7 @@ class MainWindow(QMainWindow):
         self.logs.append((time,msg))
         
     def _scan_folder(self):
-        db_path = self.folder_data
+        db_path = self.folder.text()
         total = 0
         
         self.addLog("===Scan images for import.===")
