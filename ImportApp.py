@@ -1,5 +1,5 @@
 from PyQt5.QtWidgets import *
-from PyQt5 import QtCore
+from PyQt5 import QtGui, QtCore
 import sys 
 from collections import deque
 from settingDialog import SettingDialog 
@@ -7,8 +7,9 @@ import os
 from appSettings import settings
 from threading import Thread
 from tqdm import tqdm
-
+import time
 import uuid
+import logging
 
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams, PointStruct
@@ -49,7 +50,7 @@ class MainWindow(QMainWindow):
         layout.addRow(self.pbar)
 
         self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.set_pbar)
+        self.timer.timeout.connect(self.update_UI)
         self.timer.start(1)
         
         self.btnScan = QPushButton(self)
@@ -106,6 +107,7 @@ class MainWindow(QMainWindow):
             print('Selected Folders:', selected_folders)
             self.updateFolder(selected_folders[0])
     def updateFolder(self, folder): 
+        self.addLog("Folder data changed.")
         self.folder_data = folder
         self.folder.setText(folder)
         self.countImages(folder)
@@ -115,11 +117,16 @@ class MainWindow(QMainWindow):
         self._thread = Thread(target=self._scan_folder, args=())
         self._thread.daemon = True
         self._thread.start()
+
+    def addLog(self, msg):
+        t = time.time()
+        self.logs.append((time,msg))
         
     def _scan_folder(self):
         db_path = self.folder_data
         total = 0
-
+        
+        self.addLog("===Scan images for import.===")
         try:
             # build models once to store them in the memory
             # otherwise, they will be built after cam started and this will cause delays
@@ -171,9 +178,11 @@ class MainWindow(QMainWindow):
                     self.upssert_item(item) 
                     total = total +1
                     self.percent.append(int(total/ len(employees)*100))
-        except:
+        except Exception as ex: 
+            self.addLog(f'error: {ex}')
             pass
-        print ("total import recode: ", total)
+        self.addLog("total import recode: ", total)
+        self.addLog("===Scan End===")
         self.btnScan.setEnabled(True)
 
     def upssert_item(self, item):
@@ -216,8 +225,12 @@ class MainWindow(QMainWindow):
                     employees.append((exact_path, id))
         return employees
     
-    def set_pbar(self):
+    def update_UI(self):
         self.pbar.setValue(self.percent[-1])
+        while len(self.logs) > 0:
+            time, msg = self.logs.pop()
+            self.widget_log.moveCursor(QtGui.QTextCursor.Start)
+            self.widget_log.insertPlainText(f'{time.strftime("%H.%M.%S")} : ' + msg + "\r\n")
         if self._thread:
             if not self._thread.is_alive():
                 self.btnScan.setEnabled(True)
