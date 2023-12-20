@@ -2,20 +2,17 @@ from PyQt5.QtWidgets import *
 from PyQt5 import QtGui, QtCore
 import sys 
 from collections import deque
-from settingDialog import SettingDialog 
 import os 
 from appSettings import settings
 from threading import Thread
-from tqdm import tqdm
 import time
 import uuid
-import logging
 
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams, PointStruct
+from qdrant_client.http.models import PointStruct
 
 from deepface import DeepFace
-from deepface.commons import functions, distance
+from deepface.commons import functions
 
 model_name = "VGG-Face"
 detector_backend = "opencv"
