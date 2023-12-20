@@ -1,17 +1,17 @@
 from PyQt5.QtWidgets import *
 import sys 
 from collections import deque
+from settingDialog import SettingDialog
 from cameraWidget import CameraWidget
 from FaceRecognize import FaceRecognize
-import os
-
+import os 
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = "0"
  
 # Subclass QMainWindow to customize your application's main window
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        global faces
+        global faces 
         faces = deque(maxlen=1)
         self.setWindowTitle("Face from Camera") 
         layout = QVBoxLayout() 
@@ -38,11 +38,14 @@ class MainWindow(QMainWindow):
         w = QWidget()
         w.setLayout(layout)
         self.setCentralWidget(w)
+        self.recognize = recognize
     def onSettingClick(self, s):
-        print("click", s)
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Setting")
-        dlg.exec()
+        dlg = SettingDialog(self)
+        result = dlg.exec()
+        if result:
+            dlg.updateChanged()
+            self.recognize.load_faces()
+        print("dialog result: ", result)
 
 app = QApplication(sys.argv)
 window = MainWindow()

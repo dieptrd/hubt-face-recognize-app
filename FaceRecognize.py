@@ -20,6 +20,8 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from qdrant_client.http.models import Distance, VectorParams, PointStruct
 
+from appSettings import settings
+
 class FaceRecognize(QtWidgets.QWidget):
     def __init__(self, faces, parent=None, queue_size=1, time_windows=5*60) -> None:
         super(FaceRecognize, self).__init__(parent)     
@@ -77,32 +79,40 @@ class FaceRecognize(QtWidgets.QWidget):
         else:
             self.spin(1)
     def load_faces(self):
-        db = QdrantClient("localhost", port=6333)
-        offset = 0
+        try:
+            host = settings.get("VECTORDB","HOST", fallback= "localhost")
+            port = settings.getint("VECTORDB","PORT", fallback= 6333)
+            db = QdrantClient(host, port=port)
+            offset = 0
 
-        while offset != None:
-            points, offset = db.scroll(
-                collection_name=self.collection_name,
-                scroll_filter=models.Filter(
-                    must=[
-                        models.FieldCondition(
-                            key="class",
-                            match=models.MatchAny(any=["undefined", "TH14.01"]),
-                        ),
-                    ]
-                ),
-                offset=offset,
-                limit=100,
-                with_payload=True,
-                with_vectors=True,
-            )
+            while offset != None:
+                points, offset = db.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="class",
+                                match=models.MatchAny(any=["undefined", "TH14.01"]),
+                            ),
+                        ]
+                    ),
+                    offset=offset,
+                    limit=100,
+                    with_payload=True,
+                    with_vectors=True,
+                )
+                
+                self.client.upsert(
+                    collection_name=self.collection_name,
+                    wait=True,
+                    points=points
+                )
 
-            self.client.upsert(
-                collection_name=self.collection_name,
-                wait=True,
-                points=points
-            )
-            print(offset)
+                info = self.client.get_collection(collection_name=self.collection_name)
+                print("load faces pages: ", info.points_count)
+        except Exception as e:
+            print("load_faces error: ", e)
+            pass
     #find face by ai
     def recognize(self):
         #Load face data

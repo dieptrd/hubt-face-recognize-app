@@ -18,13 +18,14 @@ class CameraWidget(QtWidgets.QWidget):
     @param detector_backend (string): set face detector backend to opencv, retinaface, mtcnn, ssd, dlib, mediapipe or yolov8.
     """
 
-    def __init__(self, width, height, faces, stream_link=0, aspect_ratio=False, parent=None, deque_size=1, face_detector="retinaface", face_confidence_threshold=0.99):
+    def __init__(self, width, height, faces, stream_link=0, aspect_ratio=False, parent=None, deque_size=1, face_detector="retinaface", face_confidence_threshold=0.99, wait_recognize=True):
         super(CameraWidget, self).__init__(parent)
         
         # Initialize deque used to store frames read from the stream
         self.deque = deque(maxlen=deque_size)
         self.faces = faces
         self.detector_backend = face_detector
+        self.wait_recognize = wait_recognize
         self.face_confidence = face_confidence_threshold
         self.face_last = deque(maxlen=2)
         # Slight offset is needed since PyQt layouts have a built in padding
@@ -100,10 +101,6 @@ class CameraWidget(QtWidgets.QWidget):
                     self.spin(2)
             except AttributeError:
                 pass
-    def detected_face_to_cv_face(self, face):
-        face_detect = face.copy()# imutils.resize(face, width=150)
-        a  = cv2.cvtColor(face_detect, cv2.COLOR_BGR2RGB)
-        return np.interp(a, (a.min(), a.max()), (0, 255)).astype(np.uint8)
     
     def detect_face(self):
         """get face from frame"""
@@ -112,42 +109,45 @@ class CameraWidget(QtWidgets.QWidget):
         # otherwise, they will be built after cam started and this will cause delays
         DeepFace.build_model(model_name=model_name)
         target_size = functions.find_target_size(model_name=model_name)
-        while True:
-            if len(self.deque) > 0:                
-                try:
-                    frame = (self.deque[-1]).copy()
-                    face_objs = DeepFace.extract_faces(
-                        img_path=frame,
-                        target_size=target_size,
-                        detector_backend=self.detector_backend,
-                        enforce_detection=False,
-                        align=True
-                    ) 
-                    w_bigger = 0
-                    face_bigger = None
-                    for face_obj in face_objs:
-                        facial_area = face_obj["facial_area"]
-                        if facial_area["w"] > 50 and face_obj["confidence"] > self.face_confidence:
-                            if w_bigger < facial_area["w"]:
-                                w_bigger = facial_area["w"] 
-                                face_bigger = facial_area.copy()
-                                face_bigger["face"] = face_obj["face"]
-                    if w_bigger > 0:
-                        x = face_bigger["x"]
-                        y = face_bigger["y"]
-                        w = face_bigger["w"]
-                        h = face_bigger["h"]
-                        detected_face = frame[y : y + h, x : x + w]  # crop detected face
-                        item = {"x": x, "y": y, "w": w, "h": h}
-                        item["face"] = face_bigger["face"]
-                        item['detected'] = detected_face
-                        self.add_face(item)
-                except Exception as e:
-                    print("Detect face e: ", e)
-                    self.spin(1)
-                    pass
-            else:
+        while True:            
+            if self.wait_recognize and len(self.faces) >0: 
+                self.spin(1)
+                continue
+            if len(self.deque) < 0:
                 self.spin(2)
+                continue
+            try:
+                frame = (self.deque[-1]).copy()
+                face_objs = DeepFace.extract_faces(
+                    img_path=frame,
+                    target_size=target_size,
+                    detector_backend=self.detector_backend,
+                    enforce_detection=False,
+                    align=True
+                ) 
+                w_bigger = 0
+                face_bigger = None
+                for face_obj in face_objs:
+                    facial_area = face_obj["facial_area"]
+                    if facial_area["w"] > 50 and face_obj["confidence"] > self.face_confidence:
+                        if w_bigger < facial_area["w"]:
+                            w_bigger = facial_area["w"] 
+                            face_bigger = facial_area.copy()
+                            face_bigger["face"] = face_obj["face"]
+                if w_bigger > 0:
+                    x = face_bigger["x"]
+                    y = face_bigger["y"]
+                    w = face_bigger["w"]
+                    h = face_bigger["h"]
+                    detected_face = frame[y : y + h, x : x + w]  # crop detected face
+                    item = {"x": x, "y": y, "w": w, "h": h}
+                    item["face"] = face_bigger["face"]
+                    item['detected'] = detected_face
+                    self.add_face(item)
+            except Exception as e:
+                print("Detect face e: ", e)
+                self.spin(1)
+                pass
 
     def add_face(self, face_item):        
         face_item["tic"] = time.time()
@@ -168,7 +168,7 @@ class CameraWidget(QtWidgets.QWidget):
 
         if self.deque and self.online:
             # Grab latest frame
-            frame = self.deque[-1]
+            frame = (self.deque[-1]).copy()
             if len(self.face_last) > 0:
                 face = self.face_last[-1]
                 if time.time() - face['tic'] < 2:
