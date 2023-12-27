@@ -63,7 +63,7 @@ class FaceRecognize(QtWidgets.QWidget):
         self.view_widget.setHorizontalHeaderLabels(["Detected", "In Stream", "In Database"])
         self.view_widget.resizeColumnsToContents()
         self.view_widget.resizeRowsToContents()
-        self.view_widget.click.connect(self.import_item)
+        self.view_widget.doubleClicked.connect(self.import_item)
 
         # Periodically set video frame to display
         #main thread add item recognize to view
