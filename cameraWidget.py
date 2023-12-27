@@ -8,6 +8,7 @@ from deepface import DeepFace
 from deepface.commons import functions
 import imutils
 import numpy as np
+from appSettings import settings
 class CameraWidget(QtWidgets.QWidget):
     """Independent camera feed
     Uses threading to grab IP camera frames in the background
@@ -18,14 +19,12 @@ class CameraWidget(QtWidgets.QWidget):
     @param detector_backend (string): set face detector backend to opencv, retinaface, mtcnn, ssd, dlib, mediapipe or yolov8.
     """
 
-    def __init__(self, width, height, faces, stream_link=0, aspect_ratio=False, parent=None, deque_size=1, face_detector="retinaface", face_confidence_threshold=0.99, wait_recognize=True):
+    def __init__(self, width, height, faces, stream_link=0, aspect_ratio=False, parent=None, deque_size=1, face_confidence_threshold=0.99):
         super(CameraWidget, self).__init__(parent)
         
         # Initialize deque used to store frames read from the stream
         self.deque = deque(maxlen=deque_size)
         self.faces = faces
-        self.detector_backend = face_detector
-        self.wait_recognize = wait_recognize
         self.face_confidence = face_confidence_threshold
         self.face_last = deque(maxlen=2)
         # Slight offset is needed since PyQt layouts have a built in padding
@@ -41,9 +40,11 @@ class CameraWidget(QtWidgets.QWidget):
         self.online = False
         self.capture = None
         self.video_frame = QtWidgets.QLabel()
+        self.detected_frame = None
 
         self.load_network_stream()
-        
+        self.update_recognize()
+
         # Start background frame grabbing
         self.get_frame_thread = Thread(target=self.get_frame, args=())
         self.get_frame_thread.daemon = True
@@ -102,28 +103,33 @@ class CameraWidget(QtWidgets.QWidget):
             except AttributeError:
                 pass
     
+    def update_recognize(self):
+        self.detector_backend = settings.get("PROCESSING", "DETECTED_METHOD", fallback="retinaface")
+        self.model_name = settings.get("PROCESSING", "RECOGNIZE_METHOD", fallback="VGG-Face")
+        self.wait_recognize = settings.get("PROCESSING", "WAIT_RECOGNIZED", fallback="True") == "True"
+        print(f'detector: {self.detector_backend}, model: {self.model_name}, slow: {self.wait_recognize}')
+        DeepFace.build_model(model_name= self.model_name)
+        self.target_size = functions.find_target_size(model_name= self.model_name)
+
     def detect_face(self):
-        """get face from frame"""
-        model_name = "VGG-Face"
+        """get face from frame""" 
         # build models once to store them in the memory
-        # otherwise, they will be built after cam started and this will cause delays
-        DeepFace.build_model(model_name=model_name)
-        target_size = functions.find_target_size(model_name=model_name)
+        # otherwise, they will be built after cam started and this will cause delays 
         while True:            
             if self.wait_recognize and len(self.faces) >0: 
                 self.spin(1)
                 continue
-            if len(self.deque) < 0:
+            if len(self.deque) < 1:
                 self.spin(2)
                 continue
             try:
                 frame = (self.deque[-1]).copy()
                 face_objs = DeepFace.extract_faces(
-                    img_path=frame,
-                    target_size=target_size,
+                    img_path=frame.copy(),
+                    target_size=self.target_size,
                     detector_backend=self.detector_backend,
                     enforce_detection=False,
-                    align=True
+                    align=False
                 ) 
                 w_bigger = 0
                 face_bigger = None
@@ -133,26 +139,16 @@ class CameraWidget(QtWidgets.QWidget):
                         if w_bigger < facial_area["w"]:
                             w_bigger = facial_area["w"] 
                             face_bigger = facial_area.copy()
-                            face_bigger["face"] = face_obj["face"]
                 if w_bigger > 0:
-                    x = face_bigger["x"]
-                    y = face_bigger["y"]
-                    w = face_bigger["w"]
-                    h = face_bigger["h"]
-                    detected_face = frame[y : y + h, x : x + w]  # crop detected face
-                    item = {"x": x, "y": y, "w": w, "h": h}
-                    item["face"] = face_bigger["face"]
-                    item['detected'] = detected_face
-                    self.add_face(item)
+                    item = face_bigger.copy()
+                    item['frame'] = frame.copy()
+                    item["tic"] = time.time()
+                    self.faces.append(item.copy())
+                    self.face_last.append(item.copy()) 
             except Exception as e:
                 print("Detect face e: ", e)
                 self.spin(1)
-                pass
-
-    def add_face(self, face_item):        
-        face_item["tic"] = time.time()
-        self.faces.append(face_item)
-        self.face_last.append(face_item)
+                pass 
     def spin(self, seconds):
         """Pause for set amount of seconds, replaces time.sleep so program doesnt stall"""
 
@@ -171,7 +167,7 @@ class CameraWidget(QtWidgets.QWidget):
             frame = (self.deque[-1]).copy()
             if len(self.face_last) > 0:
                 face = self.face_last[-1]
-                if time.time() - face['tic'] < 2:
+                if time.time() - face['tic'] < 5:
                     x = face["x"]
                     y = face["y"]
                     w = face["w"]
@@ -195,5 +191,22 @@ class CameraWidget(QtWidgets.QWidget):
             pix = QtGui.QPixmap.fromImage(img)
             self.video_frame.setPixmap(pix)
 
+        if len(self.face_last) > 0 and self.detected_frame is not None:
+            face = (self.face_last[-1]).copy()
+            if not hasattr(self, "detected_frame_tic"):
+                self.detected_frame_tic = 0
+            if self.detected_frame_tic != face["tic"]:
+                self.detected_frame_tic = face["tic"]
+                x,y,w,h = face["x"], face["y"], face["w"], face["h"]
+                img_face = face["frame"][y : y + h, x : x + w]  # crop detected face
+                img_face = imutils.resize(img_face, width=200)
+                img_face = QtGui.QImage(img_face, img_face.shape[1], img_face.shape[0], QtGui.QImage.Format_RGB888).rgbSwapped()
+                pix_face = QtGui.QPixmap.fromImage(img_face)
+                self.detected_frame.setPixmap(pix_face)
+
     def get_video_frame(self):
         return self.video_frame
+    def get_face_detected_frame(self):        
+        if self.detected_frame is None:
+            self.detected_frame = QtWidgets.QLabel()
+        return self.detected_frame

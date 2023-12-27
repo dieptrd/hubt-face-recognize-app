@@ -6,6 +6,7 @@ class AppSettings(configparser.ConfigParser):
         self.env = env
         self.read("./config/settings/"+self.env+".ini")
     def update(self):
-        self.write("./config/settings/"+self.env+".ini")
+        # self.write("./config/settings/"+self.env+".ini")
+        return 1
 settings = AppSettings()
 print("Environment: ",settings.env)

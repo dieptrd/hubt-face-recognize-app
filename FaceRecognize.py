@@ -6,6 +6,7 @@ import imutils
 import time
 import os
 
+from collections import deque
 from deepface import DeepFace
 from deepface.commons import functions, distance
 
@@ -49,13 +50,21 @@ class FaceRecognize(QtWidgets.QWidget):
         self.recognized_items = [] # face list to show
         self.model_name = "VGG-Face"
         self.time_windows = time_windows
-        self.get_frame_thread = Thread(target=self.recognize, args=())
-        self.get_frame_thread.daemon = True
-        self.get_frame_thread.start()
+
+        self.recognize_thread = Thread(target=self.recognize, args=())
+        self.recognize_thread.daemon = True
+        self.recognize_thread_wait_stop = False
+        self.reload_recognize_thread()
+
+        self.recognize_frame_queue = deque(maxlen=1)
+        self.recognize_frame = None
 
         self.view_widget = QtWidgets.QTableWidget(0, 3)
+        self.view_widget.setHorizontalHeaderLabels(["Detected", "In Stream", "In Database"])
         self.view_widget.resizeColumnsToContents()
         self.view_widget.resizeRowsToContents()
+        self.view_widget.click.connect(self.import_item)
+
         # Periodically set video frame to display
         #main thread add item recognize to view
         # Periodically set video frame to display
@@ -66,20 +75,44 @@ class FaceRecognize(QtWidgets.QWidget):
     def get_view(self):
         return self.view_widget
     
+    def get_recognize_frame(self):
+        if self.recognize_frame is None:
+            self.recognize_frame = QtWidgets.QLabel()
+        return self.recognize_frame
+
     def set_row(self): 
         "update UI Widget for recognized items"
+        # update recognize items view
         rows = self.view_widget.rowCount()
         recognized = len(self.recognized_items) 
         if rows < recognized:
-            print("Add items")
+            # print("Add items")
             while rows < recognized:
-                detected_face, item_intime, item_recognize = self.recognized_items[rows]
-                self.addView(detected_face, item_intime, item_recognize)
+                detected_face, item_instream, item_recognize = self.recognized_items[rows]
+                self.addView(detected_face, item_instream, item_recognize)
                 rows = (rows+1)
-        else:
-            self.spin(1)
+        # update recognize frame view
+        if len(self.recognize_frame_queue) > 0 and self.recognize_frame is not None:
+            img = self.recognize_frame_queue.pop()
+            img = imutils.resize(img, width=200)
+            pix_face = self.convert_cv_qt(img)
+            self.recognize_frame.setPixmap(pix_face)
+    
+    def reload_recognize_thread(self):
+        if self.recognize_thread:
+            while(self.recognize_thread.is_alive()):
+                self.recognize_thread_wait_stop = True
+                self.spin(1)
+        
+        self.recognize_thread_wait_stop = False
+        self.load_faces()
+        DeepFace.build_model(model_name=self.model_name)
+        self.recognize_thread.start()
+        
     def load_faces(self):
         try:
+            #wait recognize thread close
+            
             host = settings.get("VECTORDB","HOST", fallback= "localhost")
             port = settings.getint("VECTORDB","PORT", fallback= 6333)
             db = QdrantClient(host, port=port)
@@ -114,100 +147,128 @@ class FaceRecognize(QtWidgets.QWidget):
             print("load_faces error: ", e)
             pass
     #find face by ai
-    def recognize(self):
-        #Load face data
-        self.load_faces()
-        DeepFace.build_model(model_name=self.model_name)
+    def recognize(self):        
         while True:
+            if self.recognize_thread_wait_stop:
+                break 
             try:
                 if(len(self.faces) > 0):
+                    #crop full face with background
                     face = self.faces.pop()
-                    img = face["face"]
-                    represent = DeepFace.represent(                        
-                        img_path=img,
-                        model_name=self.model_name,
-                        enforce_detection=True, 
-                        align=True,
-                        detector_backend="skip" #retinaface
+                    frame = face['frame']
+                    # crop detected face with some outsize
+                    x,y,w,h = face["x"], face["y"], face["w"], face["h"]
+                    crop = frame[y-int(h/2) : y + h + int(y/2), x-(int(x/4)) : x + w + int(x/2)]  
+
+                    #refind face in frame with retinaface methods
+                    face_objs = DeepFace.extract_faces(
+                        img_path= crop.copy(),
+                        target_size= functions.find_target_size(self.model_name),
+                        enforce_detection= True, 
+                        align= True,
+                        detector_backend= "retinaface", #skip
                     )
+
+                    #get bigger face
+                    face_width = 0
+                    face_bigger = None
+                    face_mark = None
+                    for face_obj in face_objs:
+                        facial_area = face_obj["facial_area"]
+                        if facial_area["w"] > 50 and face_obj["confidence"] > 0.99:
+                            if face_width <  facial_area["w"]:
+                                face_width =  facial_area["w"]
+                                face_bigger = facial_area
+                                face_mark = face_obj["face"]
+                    
+                    if face_bigger is None:
+                        raise Exception("Face not found.")
+                    
+                    #crop face
+                    x,y,w,h = face_bigger["x"], face_bigger["y"], face_bigger["w"], face_bigger["h"]
+                    face_bigger['detected'] = crop[y : y + h, x : x + w]
+                    face_bigger['face'] = face_mark.copy()
+
+                    # save face to show on UI
+                    self.recognize_frame_queue.append(face_mark.copy()) 
+
+                    #convert finded face to vector
+                    represent = DeepFace.represent(                        
+                        img_path= face_mark.copy(),
+                        model_name= self.model_name,
+                        enforce_detection= False, 
+                        align= True,
+                        normalization="VGGFace",
+                        detector_backend= "skip"
+                    ) 
                     
                     #check unique face in stream
-                    item = self.find_face_in_stream(represent=represent[0]["embedding"], face_item = face) 
-
+                    item = self.find_face_in_stream(represent=represent[0]["embedding"], face_item = face_bigger) 
+                     
                     if (not self.recognized.exists(item.id)):
                         print("add face from camera to table: ", item.id)
                         #recognize in known db
                         self.recognized.add(item.id, item)
-                        item_recognized = self.find(represent=represent[0]["embedding"], face_item = face) 
-                        self.recognized_items.append((img, item, item_recognized)) 
-            
-                        # if(img.max() < 1):
-                        #     a = img.copy()
-                        #     img = np.interp(a, (a.min(), a.max()), (0, 255)).astype(np.uint8)
-                        #     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) #convert to rgb image
-                        #     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) #convert to rgb image
-                        
-                        # print("img.shape: ", img.shape)
-
-                        # info = RetinaFace.detect_faces(img_path = img, threshold=0.9) 
-                        # if isinstance(info, dict):
-                        #     for face_idx in info.keys():
-                        #         face["features"] = info[face_idx]
-                        #         #check unique face in stream  
-                        #         self.recognized.add(item.id, item)
-                        #         item_recognized = self.find(represent=represent[0]["embedding"], face_item = face)
-                        #         self.recognized_items.append((face["detected"], item, item_recognized))
-                        #         break
-                        # else:
-                        #     print("RetinaFace: Face detect verify fault")
-
-                self.spin(1)
+                        item_recognized = self.find_face_in_db(represent=represent[0]["embedding"])
+                        self.recognized_items.append((face_bigger['detected'].copy(), item, item_recognized))
+                        print("3") 
             except Exception as error:
-                print("recognize error: ", error)
+                print("recognize error: ", type(error).__module__, error)
                 self.spin(2)
                 pass
-    
+    def _rever_image(self, img):
+        if(img.max() < 1):
+            a = img.copy()
+            img = np.interp(a, (a.min(), a.max()), (0,255)).astype(np.uint8) 
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) #convert to rgb image
+            # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) #convert to rgb image
+        return img
     def spin(self, seconds):
         """Pause for set amount of seconds, replaces time.sleep so program doesnt stall"""
         time_end = time.time() + seconds
         while time.time() < time_end:
             QtWidgets.QApplication.processEvents()
-    def addView(self, detected_face, item_intime, item_recognize):
-        face_icon = item_intime.payload["img"] # imutils.resize(face, width=150)
-        pix = None
-        if type(face_icon) == str:
-            pix =  QtGui.QPixmap(face_icon)
-        else:
-            pix = face_icon   
-        item = QtWidgets.QLabel()
-        item.setText("")
-        item.setPixmap(pix) 
-        item.setScaledContents(True)  
+    def addView(self, detected_face, item_instream, item_recognize):
+        try:
+            face_icon, _ = functions.load_image(item_instream.payload["img"]) # imutils.resize(face, width=150)
+        
+            item = QtWidgets.QLabel("", self)
+            item.setPixmap(self.convert_cv_qt(face_icon)) 
+            item.setScaledContents(True)  
+            
+            item_f = QtWidgets.QLabel("", self) 
+            item_f.setPixmap(self.convert_cv_qt(detected_face)) 
+            item_f.setScaledContents(True)  
 
-        img = detected_face.copy()# imutils.resize(face, width=150) 
-        pix_f = self.convert_cv_qt(img)
-        item_f = QtWidgets.QLabel()
-        item_f.setText("")
-        item_f.setPixmap(pix_f) 
-        item_f.setScaledContents(True)  
+            item_id = QtWidgets.QLabel()
+            if item_recognize == None:
+                item_id.setText("Unrecognize")
+            else:
+                item_id.setText(item_recognize.payload["id"])
 
-        item_id = QtWidgets.QLabel()
-        if item_recognize == None:
-            item_id.setText("Unrecognize")
-        else:
-            item_id.setText(item_recognize.payload["id"])
+            #add item
+            rowPosition = self.view_widget.rowCount()
+            self.view_widget.insertRow(rowPosition) 
+            self.view_widget.setCellWidget(rowPosition, 0, item_f)
+            self.view_widget.setCellWidget(rowPosition, 1, item)
+            self.view_widget.setCellWidget(rowPosition, 2, item_id)
+        except Exception as ex:
+            print("add row error: ", ex)
+            pass
+    def import_item(self, item):
+        print(f"Item {item.row()}, {item.column()} was double-clicked")
+        detected_face, item_instream, item_recognize = self.recognized_items[item.row()]
 
-        #add item
-        rowPosition = self.view_widget.rowCount()
-        self.view_widget.insertRow(rowPosition) 
-        self.view_widget.setCellWidget(rowPosition, 0, item_f)
-        self.view_widget.setCellWidget(rowPosition, 1, item)
-        self.view_widget.setCellWidget(rowPosition, 2, item_id)
-    def convert_cv_qt(self, cv_img):
-        if cv_img.max() < 1:
-            a = cv_img.copy()
-            cv_img = np.interp(a, (a.min(), a.max()), (0, 255)).astype(np.uint8)
-            cv_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+    def _rever_image(self, img):
+        if(img.max() < 1):
+            a = img.copy()
+            img = np.interp(a, (a.min(), a.max()), (0,255)).astype(np.uint8) 
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) #convert to rgb image
+            # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) #convert to rgb image
+        return img
+    
+    def convert_cv_qt(self, img):
+        cv_img = self._rever_image(img)
 
         rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
@@ -230,10 +291,10 @@ class FaceRecognize(QtWidgets.QWidget):
         # print("search length: ", len(data))
         if len(data) > 0:
             item = data[0] 
-            throw = 0.1 # distance.findThreshold(model_name=self.model_name, distance_metric= "cosine")
+            throw = distance.findThreshold(model_name=self.model_name, distance_metric= "cosine")
             d = distance.findCosineDistance(item.vector, represent)  
             if d < throw:                 
-                print("face exists in video search score: ", item.score, d, throw)
+                # print("face exists in video search score: ", item.score, d, throw)
                 return item
         
         #add item if not found
@@ -247,7 +308,7 @@ class FaceRecognize(QtWidgets.QWidget):
                 "face_region": {"x":face_item["x"], "y":face_item["y"], "w":face_item["w"], "h":face_item["h"]},
                 "id": "1",
                 "type": "unvalidated",
-                "img": self.convert_cv_qt(face_item["detected"])
+                "img": face_item["detected"]
             },
         )        
         self.face_in_stream.upsert(
@@ -257,7 +318,7 @@ class FaceRecognize(QtWidgets.QWidget):
         )
         return item
     
-    def find(self, face_item, represent):
+    def find_face_in_db(self, represent):
         data =  self.client.search(
             collection_name= self.collection_name, 
             query_vector= represent,
@@ -272,7 +333,7 @@ class FaceRecognize(QtWidgets.QWidget):
             item = data[0] 
             throw = 0.1 # distance.findThreshold(model_name=self.model_name, distance_metric= "cosine")
             d = distance.findCosineDistance(item.vector, represent)  
-            print("search score: ", item.score, d, throw)
+            # print("search score: ", item.score, d, throw)
             if d < throw: 
                 return (item)
         

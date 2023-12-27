@@ -27,25 +27,37 @@ class MainWindow(QMainWindow):
         
         # Create camera widgets
         print('Creating Camera Widgets...')
-        zero = CameraWidget(700,800, faces, camera0 , aspect_ratio=True)
+        zero = CameraWidget(500,600, faces, camera0 , aspect_ratio=True)
+        recognize = FaceRecognize(faces)
+        self.recognize = recognize
+        self.camera = zero
         # Add widgets to layout
         print('Adding Camera widget to layout...')
-        layout.addWidget(zero.get_video_frame()) 
+        layout.addWidget(zero.get_video_frame())  
         print('Verifying camera credentials...') 
-        recognize = FaceRecognize(faces)
+        
         print('Adding Faces recognize widget to layout...')
+        layout.addWidget(self.init_regcognize_frame())
         layout.addWidget(recognize.get_view())
         w = QWidget()
         w.setLayout(layout)
         self.setCentralWidget(w)
-        self.recognize = recognize
     def onSettingClick(self, s):
         dlg = SettingDialog(self)
         result = dlg.exec()
         if result:
             dlg.updateChanged()
             self.recognize.load_faces()
+            self.camera.update_recognize()
         print("dialog result: ", result)
+
+    def init_regcognize_frame(self):
+        _widget = QWidget(self)
+        _widget.setLayout(QHBoxLayout())
+        _widget.layout().addWidget(self.camera.get_face_detected_frame())
+        _widget.layout().addWidget(self.recognize.get_recognize_frame())
+
+        return _widget
 
 app = QApplication(sys.argv)
 window = MainWindow()
