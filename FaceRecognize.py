@@ -5,6 +5,7 @@ import numpy as np
 import imutils
 import time
 import os
+import base64
 
 from collections import deque
 from deepface import DeepFace
@@ -15,6 +16,7 @@ from deepface.detectors import FaceDetector
 from retinaface import RetinaFace
 
 from PyQt5 import QtCore, QtWidgets, QtGui
+from importDialog import ImportDialog
 from timebounded import TimeBounded
 
 from qdrant_client import QdrantClient
@@ -186,6 +188,7 @@ class FaceRecognize(QtWidgets.QWidget):
                     
                     #crop face
                     x,y,w,h = face_bigger["x"], face_bigger["y"], face_bigger["w"], face_bigger["h"]
+                    face_bigger['frame'] = crop
                     face_bigger['detected'] = crop[y : y + h, x : x + w]
                     face_bigger['face'] = face_mark.copy()
 
@@ -258,6 +261,18 @@ class FaceRecognize(QtWidgets.QWidget):
     def import_item(self, item):
         print(f"Item {item.row()}, {item.column()} was double-clicked")
         detected_face, item_instream, item_recognize = self.recognized_items[item.row()]
+        if item_recognize is None:
+            dlg = ImportDialog(self)
+            result = dlg.exec()
+            if result: 
+                item_instream.payload["id"] = dlg.studentId.text()
+                self.client.upsert(
+                    collection_name=self.collection_name,
+                    points= [item_instream],
+                    wait=True
+                )
+                self.load_faces()
+            print("dialog result: ", result)
 
     def _rever_image(self, img):
         if(img.max() < 1):
@@ -308,16 +323,20 @@ class FaceRecognize(QtWidgets.QWidget):
                 "face_region": {"x":face_item["x"], "y":face_item["y"], "w":face_item["w"], "h":face_item["h"]},
                 "id": "1",
                 "type": "unvalidated",
-                "img": face_item["detected"]
+                "img": self.convert_image_base64(face_item["frame"])
             },
-        )        
+        )    
+            
         self.face_in_stream.upsert(
             collection_name=self.collection_name,
             wait=True,
             points=[item]
         )
         return item
-    
+    def convert_image_base64(self, img, ext= ".jpg"):
+        a, _ = functions.load_image(img)
+        img_base64 = base64.b64encode(cv2.imencode(ext, img)[1]).decode()
+        return f'data:image/{ext};base64,' + img_base64
     def find_face_in_db(self, represent):
         data =  self.client.search(
             collection_name= self.collection_name, 

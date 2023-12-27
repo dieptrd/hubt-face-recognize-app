@@ -243,7 +243,7 @@ class MainWindow(QMainWindow):
             pass
         self.addLog(f'total import recode: {total}')
         self.addLog("===Scan End===")
-
+    
     def upssert_item(self, item, client):
         global collection_name, uuid
         result  = client.search(
@@ -301,8 +301,8 @@ class MainWindow(QMainWindow):
                 self.btnScan.setEnabled(True)
     def countImages(self, folder):
         employees = self._findImages(folder)
-        self.btnScan.setText(f'Scan ({len(employees)} Images)')
-
+        self.btnScan.setText(f'Scan ({len(employees)} Images)') 
+    
     def _rever_image(self, img):
         if(img.max() < 1):
             a = img.copy()
