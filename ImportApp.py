@@ -201,7 +201,7 @@ class MainWindow(QMainWindow):
                 )
              
             
-            for (employee, id, ext) in employees:
+            for (employee, id, ext, class_name) in employees:
                 img_objs = DeepFace.extract_faces(
                     img_path=employee,
                     target_size=target_size,
@@ -226,12 +226,11 @@ class MainWindow(QMainWindow):
                     img_base64 = f'data:image/{ext};base64,' + base64.b64encode(cv2.imencode(ext, img)[1]).decode()
                     self.import_image_queue.append(img_base64)
                     instance = {
-                        "img": employee,
-                        "base64": img_base64,
+                        "img": img_base64,
                         "id": id,
                         "face_region": img_region.copy(),
                         "type": "validated",
-                        "class": "undefined"
+                        "class": class_name
                     }
                     item = {"represent": img_representation, "instance": instance}
                     self.upssert_item(item, client) 
@@ -274,6 +273,10 @@ class MainWindow(QMainWindow):
     def _findImages(self, db_path):
         employees = []
         for r, _, f in os.walk(db_path):
+            segments = r.lower().split(os.sep)
+            class_name = segments[-1]
+            if segments[-1] == db_path:
+                class_name = "undefined"
             for file in f:
                 if (
                     (".jpg" in file.lower())
@@ -281,8 +284,8 @@ class MainWindow(QMainWindow):
                     or (".png" in file.lower())
                 ):
                     exact_path = r + "/" + file
-                    segment = file.lower().split(".")
-                    employees.append((exact_path, segment[0], f'.{segment[1]}'))
+                    ext_segments = file.lower().split(".")
+                    employees.append((exact_path, ext_segments[0], f'.{ext_segments[1]}', class_name))
         return employees
     
     def update_UI(self):
