@@ -30,7 +30,7 @@ class FaceRecognize(QtWidgets.QWidget):
         super(FaceRecognize, self).__init__(parent)     
         self.faces = faces
         self.collection_name="hubt_faces"
-        vector_size = 2622
+        self.vector_size = 2622
         local_path="./vectordb"
         
         self.client = QdrantClient(path=local_path)
@@ -38,13 +38,13 @@ class FaceRecognize(QtWidgets.QWidget):
         if not os.path.isfile(local_path + "/collection/hubt_faces/storage.sqlite"):
             self.client.create_collection(
                 collection_name= self.collection_name,
-                vectors_config= VectorParams(size=vector_size, distance=Distance.COSINE),
+                vectors_config= VectorParams(size=self.vector_size, distance=Distance.COSINE),
             )
 
         self.face_in_stream = QdrantClient(":memory:")
         self.face_in_stream.create_collection(
             collection_name= self.collection_name,
-            vectors_config= VectorParams(size=vector_size, distance=Distance.COSINE),
+            vectors_config= VectorParams(size=self.vector_size, distance=Distance.COSINE),
         )
 
         self.represents = [] #unique face in videos
@@ -104,14 +104,28 @@ class FaceRecognize(QtWidgets.QWidget):
         if self.recognize_thread:
             while(self.recognize_thread.is_alive()):
                 self.recognize_thread_wait_stop = True
-                self.spin(1)
+                self.spin(0.5)
         
         self.recognize_thread_wait_stop = False
-        self.load_faces()
+        self.progress_dialog = QtWidgets.QProgressDialog()
+        self.progress_dialog.setLabelText("DB Loading...")
+        self.progress_dialog.setRange(0, 100)
+        self.progress_dialog.setModal(True)
+        self.progress_dialog.setCancelButton(None)
+        self.progress_dialog.setAutoClose(True)
+        self.progress_dialog.setWindowModality(QtCore.Qt.WindowModal)
+        self.progress_dialog.show()
+
+        self.client.recreate_collection(
+            collection_name= self.collection_name,
+            vectors_config= VectorParams(size=self.vector_size, distance=Distance.COSINE)
+        )
         DeepFace.build_model(model_name=self.model_name)
-        self.recognize_thread.start()
-        
+        self.load_faces()        
+        self.recognize_thread.start() 
+
     def load_faces(self):
+        db = None
         try:
             #wait recognize thread close
             
@@ -148,6 +162,10 @@ class FaceRecognize(QtWidgets.QWidget):
         except Exception as e:
             print("load_faces error: ", e)
             pass
+        finally:
+            if db is not None:
+                db.close()
+            self.progress_dialog.close()
     #find face by ai
     def recognize(self):        
         while True:

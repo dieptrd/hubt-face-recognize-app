@@ -141,31 +141,30 @@ class MainWindow(QMainWindow):
         self.addLog("==Clear Vectors Database==")
         client = None
         try:
-            client = QdrantClient(self.host.text(), port= int(self.port.text()))
-            collections = client.get_collections()
-            exists = False
-            for _, c in collections:
-                if c[0].name == collection_name:
-                   exists = True
-                   break
-            if exists:
-                info = client.get_collection(collection_name=collection_name)
+            client = QdrantClient(self.host.text(), port= int(self.port.text())) 
+            exists = self.total_vectors(client) 
+            if exists >= 0: 
                 dialog = QMessageBox(self)
                 dialog.setIcon(QMessageBox.Warning)
                 dialog.setWindowTitle("Warning")
-                dialog.setText(f'DB had {info.points_count} vectors')
+                dialog.setText(f'DB had {exists} vectors')
                 dialog.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel) 
                 if dialog.exec() == QMessageBox.Ok:
-                    if client.delete_collection(collection_name=collection_name):
+                    if client.recreate_collection(
+                        collection_name= collection_name,
+                        vectors_config= VectorParams(size=vector_size, distance=Distance.COSINE),
+                    ):
                         #delete success 
-                        self.addLog("DB deleted")
+                        self.addLog("DB clear success!")
                 else:
                     raise ValueError("User Cancel.")
             #create new
-            client.create_collection(
-                collection_name= collection_name,
-                vectors_config= VectorParams(size=vector_size, distance=Distance.COSINE),
-            )    
+            else:
+                self.addLog(f'Create new collection, vector_size is: {vector_size}')
+                client.create_collection(
+                    collection_name= collection_name,
+                    vectors_config= VectorParams(size=vector_size, distance=Distance.COSINE),
+                )    
         except Exception as ex:    
             print(ex)
             self.addLog(f'{ex}')
@@ -173,6 +172,15 @@ class MainWindow(QMainWindow):
 
         self.addLog("==Clear Vectors Database Done==")
         return 1
+    
+    def total_vectors(self, conn):
+        global collection_name
+        try:
+            info = conn.get_collection(collection_name=collection_name)
+            return info.points_count
+        except Exception as e:
+            self.addLog("Collection collection_name not exists")
+        return -1
 
     def addLog(self, msg):
         t = time.time()
