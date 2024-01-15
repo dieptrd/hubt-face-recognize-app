@@ -1,12 +1,13 @@
 from PyQt5.QtWidgets import *
 import sys 
 from collections import deque
+from appSettings import settings
 from settingDialog import SettingDialog
 from cameraWidget import CameraWidget
 from FaceRecognize import FaceRecognize
 import os 
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = "0"
- 
+os.environ['DEEPFACE_HOME'] = settings.get("DEEPFACE_HOME", "HOST", fallback="./models")
 # Subclass QMainWindow to customize your application's main window
 class MainWindow(QMainWindow):
     def __init__(self):

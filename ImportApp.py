@@ -25,6 +25,7 @@ vector_size = 2622
 collection_name="hubt_faces"
 
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = "0"
+os.environ['DEEPFACE_HOME'] = settings.get("DEEPFACE_HOME", "HOST", fallback="./models")
  
 # Subclass QMainWindow to customize your application's main window
 class MainWindow(QMainWindow):
@@ -50,7 +51,6 @@ class MainWindow(QMainWindow):
         main.addWidget(self.import_image)
         #log box
         main.addWidget(self._initWidgetLog()) 
-
         self.setLayout(main) 
         self.setCentralWidget(_widget_main)
         #recalculate
