@@ -7,7 +7,6 @@ from cameraWidget import CameraWidget
 from FaceRecognize import FaceRecognize
 import os 
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = "0"
-os.environ['DEEPFACE_HOME'] = settings.get("DEEPFACE_HOME", "HOST", fallback="./models")
 # Subclass QMainWindow to customize your application's main window
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -23,6 +22,8 @@ class MainWindow(QMainWindow):
         button_action.setStatusTip("Change app's setting")
         button_action.triggered.connect(self.onSettingClick)
         toolbar.addAction(button_action)
+        # open settingDialog when start app
+        self.onSettingClick(None)
         # Stream links
         camera0 = 0
         
@@ -43,13 +44,18 @@ class MainWindow(QMainWindow):
         w = QWidget()
         w.setLayout(layout)
         self.setCentralWidget(w)
+    
     def onSettingClick(self, s):
         dlg = SettingDialog(self)
         result = dlg.exec()
         if result:
             dlg.updateChanged()
-            self.recognize.load_faces()
-            self.camera.update_recognize()
+            if hasattr(self, 'recognize'):
+                self.recognize.load_faces()
+                pass
+            if hasattr(self, 'camera'):
+                self.camera.update_recognize()
+                pass 
         print("dialog result: ", result)
 
     def init_regcognize_frame(self):

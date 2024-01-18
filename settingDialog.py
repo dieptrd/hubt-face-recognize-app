@@ -1,3 +1,4 @@
+import os
 from PyQt5.QtWidgets import *
 from appSettings import settings
 
@@ -25,6 +26,9 @@ class SettingDialog(QDialog):
         widget = QGroupBox("Face Recognize Methods", self)
         layout = QFormLayout()
 
+        
+        layout.addRow('Deepface Home:', self._init_DeepfaceWidget())
+
         wait = settings.get("PROCESSING", "WAIT_RECOGNIZED", fallback="True")
         self.process = QComboBox(self)
         self.process.addItems(["True", "False"])
@@ -41,7 +45,7 @@ class SettingDialog(QDialog):
         self.recognize.addItems("VGG-Face".split(", ")) # VGG-Face, Facenet, OpenFace, DeepFace, DeepID
         self.recognize.setCurrentText(self.recognize_method)
         self.recognize.currentIndexChanged.connect(self.recognizeChanged)
-        layout.addRow('Face Detect Methods', self.recognize)
+        layout.addRow('Face Recognize Methods', self.recognize)
 
         widget.setLayout(layout)
         return widget
@@ -51,7 +55,10 @@ class SettingDialog(QDialog):
     def recognizeChanged(self, e):
         print(e)
         self.recognize_method = self.detected.currentText()
-
+    def changeDeepfaceHome(self):
+        folder_path = QFileDialog.getExistingDirectory(self, "Select Folder")
+        if folder_path:
+            self.home.setText(folder_path)
     def _init_DBWidget(self):
         widget = QGroupBox("Vector DB Location", self)
 
@@ -60,6 +67,18 @@ class SettingDialog(QDialog):
         self.port = QLineEdit(settings.get("VECTORDB", "PORT", fallback=6333), self) 
         layout.addRow('Vector Database Host:', self.host)
         layout.addRow('Vector Database Port:', self.port)
+        widget.setLayout(layout)
+        return widget
+    def _init_DeepfaceWidget(self):
+        widget = QWidget(self)
+        layout = QHBoxLayout()
+        self.home = QLineEdit(settings.get_deepface_home(), self)
+        self.home.setReadOnly(True)
+        layout.addWidget(self.home)
+
+        btn = QPushButton("Change", self)
+        btn.clicked.connect(self.changeDeepfaceHome)        
+        layout.addWidget(btn)
 
         widget.setLayout(layout)
         return widget
@@ -69,4 +88,10 @@ class SettingDialog(QDialog):
         settings.set("PROCESSING", "WAIT_RECOGNIZED", self.process.currentText())
         settings.set("PROCESSING", "DETECTED_METHOD", self.detect_method)
         settings.set("PROCESSING", "RECOGNIZE_METHOD", self.recognize_method)
+        #update deepface home folder
+        folder_path = self.home.text()
+        # check if folder_path is exists
+        if os.path.isdir(folder_path):
+            settings.set("GLOBAL", "DEEPFACE_HOME", self.home.text())
+        settings.set_deepface_home()
         settings.update()

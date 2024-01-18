@@ -234,7 +234,7 @@ class FaceRecognize(QtWidgets.QWidget):
                         self.recognized_items.append((face_bigger['detected'].copy(), item, item_recognized))
                         print("3") 
             except Exception as error:
-                print("recognize error: ", type(error).__module__, error)
+                print("recognize error: ", error)
                 self.spin(2)
                 pass
     def _rever_image(self, img):

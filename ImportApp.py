@@ -19,13 +19,7 @@ from qdrant_client.http.models import Distance, VectorParams, PointStruct
 from deepface import DeepFace
 from deepface.commons import functions
 
-model_name = "VGG-Face"
-detector_backend = "retinaface"
-vector_size = 2622
-collection_name="hubt_faces"
-
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = "0"
-os.environ['DEEPFACE_HOME'] = settings.get("DEEPFACE_HOME", "HOST", fallback="./models")
  
 # Subclass QMainWindow to customize your application's main window
 class MainWindow(QMainWindow):
@@ -37,28 +31,63 @@ class MainWindow(QMainWindow):
         self.logs = deque(maxlen=10)
         self.setWindowTitle("Add Images to database") 
         
+        self.configs = {
+            "model_name": "VGG-Face",
+            "distance_metric": "cosine",
+            "detector_backend": "retinaface",
+            "enforce_detection": True,
+            "target_size": (224, 224),
+            "collection_name": "hubt_faces",
+            "vector_size": 2622,
+            "home_folder": settings.get_deepface_home(),
+            "images_folder": "./data",
+            "db_host": settings.get("VECTORDB", "HOST", fallback="localhost"),
+            "db_port": settings.get("VECTORDB", "PORT", fallback="6333"),
+        }
         
         self.pbar = QProgressBar(self)    
 
         _widget_main = QWidget(self)
         main = QVBoxLayout(_widget_main)   
         main.addWidget(self._initWidgetDatabase()) 
-        main.addWidget(self._initWidgetFolder())
+        main.addWidget(self._init_DeepfaceWidget())
+        main.addWidget(self._initWidgetImageFolder())
         main.addWidget(self.pbar)
         main.addWidget(self._initAction())
         #read img
         self.import_image = QLabel("", self)
+        self.import_image.setAlignment(QtCore.Qt.AlignCenter)
         main.addWidget(self.import_image)
         #log box
         main.addWidget(self._initWidgetLog()) 
-        self.setLayout(main) 
+
+        _widget_main.setLayout(main) 
         self.setCentralWidget(_widget_main)
         #recalculate
-        self.updateFolder("./data")  
+        self.updateImageFolder("./data")  
 
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update_UI)
         self.timer.start(1)
+
+    def update_configs(self, key, value):
+        self.configs[key] = value
+
+    def _init_DeepfaceWidget(self):
+        _widget = QGroupBox("AI Emberdding Methods", self)
+        layout = QFormLayout()
+        _widget.setLayout(layout)
+
+        layout.addRow("Home's Folder:", self._initWidgetHomeFolder())
+
+        self.recognize = QComboBox(self)
+        self.recognize.addItems("VGG-Face".split(", ")) # VGG-Face, Facenet, OpenFace, DeepFace, DeepID
+        self.recognize.setCurrentText(self.configs.get("model_name"))
+        self.recognize.currentIndexChanged.connect(lambda: self.update_configs("model_name", self.recognize.currentText()))
+        layout.addRow('Recognize Methods', self.recognize)
+
+        return _widget 
+        
 
     def _initAction(self):
         _widget = QWidget()
@@ -77,11 +106,25 @@ class MainWindow(QMainWindow):
         _widget.layout().addWidget(self.btnScan)
         return _widget
     
-    def _initWidgetFolder(self):
+    def _initWidgetHomeFolder(self):
         _openFolder = QPushButton(self)
         _openFolder.setText("...")
-        _openFolder.clicked.connect(self.selectFolder)
-        self.folder = QLineEdit("", self)
+        _openFolder.clicked.connect(lambda: self.selectHomeFolder(home))
+        home = QLineEdit(settings.get_deepface_home(), self)
+        home.setReadOnly(True) 
+        
+        _widget = QWidget()
+        _widget.setLayout(QHBoxLayout())
+        _widget.layout().setContentsMargins(0,0,0,0)
+        _widget.layout().addWidget(home)
+        _widget.layout().addWidget(_openFolder)
+        return _widget
+
+    def _initWidgetImageFolder(self):
+        _openFolder = QPushButton(self)
+        _openFolder.setText("...")
+        _openFolder.clicked.connect(self.selectImageFolder)
+        self.folder = QLineEdit("./data", self)
         self.folder.setReadOnly(True) 
         
         _widget = QWidget()
@@ -92,14 +135,16 @@ class MainWindow(QMainWindow):
         return _widget
 
     def _initWidgetDatabase(self):
-        _widget = QWidget()
+        _widget = QGroupBox("Vector Database Service", self)
         layout = QFormLayout()
         _widget.setLayout(layout)
 
-        self.host = QLineEdit(settings.get("VECTORDB", "HOST", fallback="localhost"), _widget)        
-        self.port = QLineEdit(settings.get("VECTORDB", "PORT", fallback="6333"), _widget) 
-        layout.addRow('Vector Database Host:', self.host)
-        layout.addRow('Vector Database Port:', self.port) 
+        self.host = QLineEdit(self.configs.get("db_host"), _widget)
+        self.host.textChanged.connect(lambda: self.update_configs("db_host", self.host.text()))
+        self.port = QLineEdit(self.configs.get("db_port"), _widget) 
+        self.port.textChanged.connect(lambda: self.update_configs("db_port", self.port.text()))
+        layout.addRow('Host:', self.host)
+        layout.addRow('Port:', self.port) 
         return _widget
 
     def _initWidgetLog(self):
@@ -114,7 +159,22 @@ class MainWindow(QMainWindow):
         _widget_logs.layout().addWidget(self.widget_log)
 
         return _widget_logs
-    def selectFolder(self):
+    
+    def selectHomeFolder(self, home):
+        folder_dialog = QFileDialog(self)
+        folder_dialog.setWindowTitle('Select Folder')
+        folder_dialog.setFileMode(QFileDialog.Directory)
+        folder_dialog.setOption(QFileDialog.ShowDirsOnly, True)
+        folder_dialog.setOption(QFileDialog.ReadOnly, False)
+        folder_dialog.setDirectory(settings.get_deepface_home())
+
+        if folder_dialog.exec_() == QFileDialog.Accepted:
+            selected_folders = folder_dialog.selectedFiles() 
+            settings.set_deepface_home(selected_folders[0])
+            self.update_configs("home_folder", selected_folders[0])
+            home.setText(selected_folders[0])
+
+    def selectImageFolder(self):
         folder_dialog = QFileDialog(self)
         folder_dialog.setWindowTitle('Select Folder')
         folder_dialog.setFileMode(QFileDialog.Directory)
@@ -124,24 +184,38 @@ class MainWindow(QMainWindow):
         if folder_dialog.exec_() == QFileDialog.Accepted:
             selected_folders = folder_dialog.selectedFiles()
             print('Selected Folders:', selected_folders)
-            self.updateFolder(selected_folders[0])
-    def updateFolder(self, folder): 
+            self.updateImageFolder(selected_folders[0])
+    def updateImageFolder(self, folder): 
         self.addLog("Folder data changed.") 
+        self.configs["images_folder"] = folder
         self.folder.setText(folder)
         self.countImages(folder)
 
+    
     def scanFolder(self):
+        """
+        Scans the specified image folder for importing images into the database.
+        This method disables the 'Scan' button and starts a new thread to execute the '_scan_folder' method.
+        The '_scan_folder' method performs the actual scanning and importing of images.
+
+        Parameters:
+            None
+
+        Returns:
+            None
+        """
         self.btnScan.setEnabled(False)
         self._thread = Thread(target=self._scan_folder, args=())
         self._thread.daemon = True
         self._thread.start()
 
     def clearDatabase(self):
-        global collection_name
+        collection_name = self.configs.get("collection_name")
+        vector_size = self.configs.get("vector_size")
         self.addLog("==Clear Vectors Database==")
         client = None
         try:
-            client = QdrantClient(self.host.text(), port= int(self.port.text())) 
+            client = QdrantClient(self.configs.get("db_host"), port= int(self.configs.get("db_port"))) 
             exists = self.total_vectors(client) 
             if exists >= 0: 
                 dialog = QMessageBox(self)
@@ -174,7 +248,7 @@ class MainWindow(QMainWindow):
         return 1
     
     def total_vectors(self, conn):
-        global collection_name
+        collection_name = self.configs.get("collection_name")
         try:
             info = conn.get_collection(collection_name=collection_name)
             return info.points_count
@@ -187,17 +261,18 @@ class MainWindow(QMainWindow):
         self.logs.append((time,msg))
         
     def _scan_folder(self):
-        db_path = self.folder.text()
         total = 0
-        
+        db_path = self.configs.get("images_folder")
+        model_name = self.configs.get("model_name")
+        detector_backend = self.configs.get("detector_backend")
         self.addLog("===Scan images for import.===")
         try:
             # build models once to store them in the memory
             # otherwise, they will be built after cam started and this will cause delays
-            DeepFace.build_model(model_name=model_name)
+            DeepFace.build_model(model_name=self.configs.get("model_name"))
             target_size = functions.find_target_size(model_name=model_name)
 
-            client = QdrantClient(self.host.text(), port= int(self.port.text()))
+            client = QdrantClient(self.configs.get("db_host"), port= int(self.configs.get("db_port")))
 
             employees = self._findImages(db_path)
 
@@ -252,7 +327,8 @@ class MainWindow(QMainWindow):
         self.addLog("===Scan End===")
     
     def upssert_item(self, item, client):
-        global collection_name, uuid
+        global uuid
+        collection_name = self.configs.get("collection_name")
         result  = client.search(
             collection_name= collection_name, 
             query_vector= item["represent"],
