@@ -5,10 +5,12 @@ class AppSettings(configparser.ConfigParser):
     def __init__(self, env="development"):
         super().__init__()
         self.env = env
-        self.read("./config/settings/"+self.env+".ini")
+        self.setting_file = "./config/settings/"+self.env+".ini"
+        self.read(self.setting_file)
         self.set_deepface_home()
     def update(self):
-        # self.write("./config/settings/"+self.env+".ini")
+        with open(self.setting_file, 'w') as configfile:
+            self.write(configfile)
         return 1
     def set_deepface_home(self, path=None):
         if not path:

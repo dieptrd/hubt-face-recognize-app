@@ -64,7 +64,7 @@ class SettingDialog(QDialog):
 
         layout = QFormLayout()
         self.host = QLineEdit(settings.get("VECTORDB", "HOST", fallback="localhost"), self)
-        self.port = QLineEdit(settings.get("VECTORDB", "PORT", fallback=6333), self) 
+        self.port = QLineEdit(str(settings.get("VECTORDB", "PORT", fallback=6333)), self) 
         layout.addRow('Vector Database Host:', self.host)
         layout.addRow('Vector Database Port:', self.port)
         widget.setLayout(layout)

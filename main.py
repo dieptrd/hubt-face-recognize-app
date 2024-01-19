@@ -21,9 +21,13 @@ class MainWindow(QMainWindow):
         button_action = QAction("Setting", self)
         button_action.setStatusTip("Change app's setting")
         button_action.triggered.connect(self.onSettingClick)
-        toolbar.addAction(button_action)
-        # open settingDialog when start app
-        self.onSettingClick(None)
+        toolbar.addAction(button_action) 
+        # open settingDialog when first time start app
+        first_run =settings.get("GLOBAL", "FIRST_RUN", fallback=0)
+        if first_run == 0:
+            settings.set("GLOBAL", "FIRST_RUN", 1)
+            settings.update()
+            self.onSettingClick(None)
         # Stream links
         camera0 = 0
         
