@@ -47,6 +47,10 @@ class SettingDialog(QDialog):
         self.recognize.currentIndexChanged.connect(self.recognizeChanged)
         layout.addRow('Face Recognize Methods', self.recognize)
 
+        time_windows = str(10) # 10 seconds
+        self.time_windows = QLineEdit(time_windows,self)
+        layout.addRow('Recognize In Stream Time Windows:', self.time_windows)
+
         widget.setLayout(layout)
         return widget
     def detectChanged(self, e):
@@ -88,6 +92,7 @@ class SettingDialog(QDialog):
         settings.set("PROCESSING", "WAIT_RECOGNIZED", self.process.currentText())
         settings.set("PROCESSING", "DETECTED_METHOD", self.detect_method)
         settings.set("PROCESSING", "RECOGNIZE_METHOD", self.recognize_method)
+        settings.set("PROCESSING", "TIME_WINDOWS", self.time_windows.text())
         #update deepface home folder
         folder_path = self.home.text()
         # check if folder_path is exists

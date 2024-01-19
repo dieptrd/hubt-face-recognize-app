@@ -26,12 +26,13 @@ from qdrant_client.http.models import Distance, VectorParams, PointStruct
 from appSettings import settings
 
 class FaceRecognize(QtWidgets.QWidget):
-    def __init__(self, faces, parent=None, queue_size=1, time_windows=5*60) -> None:
+    def __init__(self, faces, parent=None, queue_size=1) -> None:
         super(FaceRecognize, self).__init__(parent)     
         self.faces = faces
         self.collection_name="hubt_faces"
         self.vector_size = 2622
         local_path="./vectordb"
+        time_windows = settings.getint("PROCESSING", "TIME_WINDOWS", fallback=5*60)
         
         self.client = QdrantClient(path=local_path)
 
@@ -51,7 +52,7 @@ class FaceRecognize(QtWidgets.QWidget):
         self.recognized =  TimeBounded(maxage=time_windows) #unique face in windows time
         self.recognized_items = [] # face list to show
         self.model_name = "VGG-Face"
-        self.time_windows = time_windows
+        
 
         self.recognize_thread = Thread(target=self.recognize, args=())
         self.recognize_thread.daemon = True
@@ -227,9 +228,8 @@ class FaceRecognize(QtWidgets.QWidget):
                     item = self.find_face_in_stream(represent=represent[0]["embedding"], face_item = face_bigger) 
                      
                     if (not self.recognized.exists(item.id)):
-                        print("add face from camera to table: ", item.id)
-                        #recognize in known db
-                        self.recognized.add(item.id, item)
+                        print("detect a new face on camera stream: ", item.id) 
+                        self.recognized.add(item.id, item)                    
                         item_recognized = self.find_face_in_db(represent=represent[0]["embedding"])
                         self.recognized_items.append((face_bigger['detected'].copy(), item, item_recognized))
                         print("3") 
@@ -278,19 +278,21 @@ class FaceRecognize(QtWidgets.QWidget):
             pass
     def import_item(self, item):
         print(f"Item {item.row()}, {item.column()} was double-clicked")
-        detected_face, item_instream, item_recognize = self.recognized_items[item.row()]
+        row_position = item.row()
+        detected_face, item_instream, item_recognize = self.recognized_items[row_position]
         if item_recognize is None:
             dlg = ImportDialog(self)
             result = dlg.exec()
-            if result: 
+            if result and len(dlg.studentId.text()) > 0: 
                 item_instream.payload["id"] = dlg.studentId.text()
                 self.client.upsert(
                     collection_name=self.collection_name,
                     points= [item_instream],
                     wait=True
                 )
-                self.load_faces()
-            print("dialog result: ", result)
+                # self.load_faces()
+                self.recognized_items[row_position] = (detected_face, item_instream, item_instream)
+                print("Add new student success: ", dlg.studentId.text(), item_instream.id)
 
     def _rever_image(self, img):
         if(img.max() < 1):
