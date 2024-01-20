@@ -19,7 +19,7 @@ class CameraWidget(QtWidgets.QWidget):
     @param detector_backend (string): set face detector backend to opencv, retinaface, mtcnn, ssd, dlib, mediapipe or yolov8.
     """
 
-    def __init__(self, width, height, faces, stream_link=0, aspect_ratio=False, parent=None, deque_size=1, face_confidence_threshold=0.99):
+    def __init__(self, width, height, faces, aspect_ratio=False, parent=None, deque_size=1, face_confidence_threshold=0.99):
         super(CameraWidget, self).__init__(parent)
         
         # Initialize deque used to store frames read from the stream
@@ -34,7 +34,7 @@ class CameraWidget(QtWidgets.QWidget):
         self.screen_height = height - self.offset
         self.maintain_aspect_ratio = aspect_ratio
 
-        self.camera_stream_link = stream_link
+        self.camera_stream_link = None
 
         # Flag to check if camera is valid/working
         self.online = False
@@ -42,7 +42,12 @@ class CameraWidget(QtWidgets.QWidget):
         self.video_frame = QtWidgets.QLabel()
         self.detected_frame = None
 
-        self.load_network_stream()
+        # Start background video source loading
+        self.load_video_thread_count = 0
+        self.load_video_thread = Thread(target=self.load_network_stream, args=())
+        self.load_video_thread.daemon = True
+        self.load_video_thread.start()
+        
         self.update_recognize()
 
         # Start background frame grabbing
@@ -63,42 +68,63 @@ class CameraWidget(QtWidgets.QWidget):
         print('Started camera: {}'.format(self.camera_stream_link))
 
     def load_network_stream(self):
-        """Verifies stream link and open new stream if valid"""
-
-        def load_network_stream_thread():
-            if self.verify_network_stream(self.camera_stream_link):
+        """detect and reconnect network stream if connection is lost"""
+        def scan_camera_sources():
+            try:
+                camera_sources = []
+                for i in range(10):
+                    cap = cv2.VideoCapture(i)
+                    if cap.isOpened():
+                        camera_sources.append(i)
+                        cap.release()
+                        break
+                if camera_sources:
+                    return camera_sources[0]
+                else:
+                    return None
+            except Exception as e:
+                print(f"Error occurred while getting camera: {str(e)}")
+                return None
+            
+        def verify_network_stream(link):
+            """Attempts to receive a frame from given link"""
+            if link is None:
+                return False
+            cap = cv2.VideoCapture(link)
+            if not cap.isOpened():
+                return False
+            cap.release()
+            return True
+        
+        while True:
+            if self.online:
+                self.spin(5)
+                continue
+            self.load_video_thread_count += 1
+            self.camera_stream_link = scan_camera_sources()
+            if verify_network_stream(self.camera_stream_link):
                 self.capture = cv2.VideoCapture(self.camera_stream_link)
                 self.online = True
-        self.load_stream_thread = Thread(target=load_network_stream_thread, args=())
-        self.load_stream_thread.daemon = True
-        self.load_stream_thread.start()
-
-    def verify_network_stream(self, link):
-        """Attempts to receive a frame from given link"""
-
-        cap = cv2.VideoCapture(link)
-        if not cap.isOpened():
-            return False
-        cap.release()
-        return True
+            else:
+                print("Camera stream not available.")
+                self.spin(1)
+                continue
 
     def get_frame(self):
         """Reads frame, resizes, and converts image to pixmap"""
 
         while True:
             try:
-                if self.capture.isOpened() and self.online:
+                if self.capture and self.online:
                     # Read next frame from stream and insert into deque
-                    status, frame = self.capture.read()
-                    if status:
-                        self.deque.append(frame)
+                    if self.capture.isOpened():
+                        status, frame = self.capture.read()
+                        if status:
+                            self.deque.append(frame)
                     else:
                         self.capture.release()
                         self.online = False
                 else:
-                    # Attempt to reconnect
-                    print('attempting to reconnect', self.camera_stream_link)
-                    self.load_network_stream()
                     self.spin(2)
             except AttributeError:
                 pass
@@ -159,6 +185,21 @@ class CameraWidget(QtWidgets.QWidget):
     def set_frame(self):
         """Sets pixmap image to video frame"""
         if not self.online:
+            def create_connecting_image(width, height):
+                image = np.zeros((height, width, 3), dtype=np.uint8)
+                
+                text = "Attempting to connect to IP camera {}".format("." * (self.load_video_thread_count % 4))
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                text_size, _ = cv2.getTextSize(text, font, 1, 2)
+                text_x = (width - text_size[0]) // 2
+                text_y = (height + text_size[1]) // 2
+                cv2.putText(image, text, (text_x, text_y), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
+                return image
+
+            connecting_image = create_connecting_image(self.screen_width, self.screen_height)
+            img = QtGui.QImage(connecting_image, connecting_image.shape[1], connecting_image.shape[0], QtGui.QImage.Format_RGB888).rgbSwapped()
+            pix = QtGui.QPixmap.fromImage(img)
+            self.video_frame.setPixmap(pix)
             self.spin(1)
             return
 

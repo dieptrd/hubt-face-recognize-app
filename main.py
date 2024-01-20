@@ -5,8 +5,13 @@ from appSettings import settings
 from settingDialog import SettingDialog
 from cameraWidget import CameraWidget
 from FaceRecognize import FaceRecognize
-import os 
+import os
+import sys  
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = "0"
+
+# Write errors to a text file
+sys.stderr = open('error_log.txt', 'w')
+
 # Subclass QMainWindow to customize your application's main window
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -28,23 +33,21 @@ class MainWindow(QMainWindow):
             settings.set("GLOBAL", "FIRST_RUN", "1")
             settings.update()
             self.onSettingClick(None)
-        # Stream links
-        camera0 = 0
         
         # Create camera widgets
         print('Creating Camera Widgets...')
-        zero = CameraWidget(500,600, faces, camera0 , aspect_ratio=True)
-        recognize = FaceRecognize(faces)
-        self.recognize = recognize
-        self.camera = zero
+        
+        self.camera = CameraWidget(500,600, faces, aspect_ratio=True)
+        self.recognize = FaceRecognize(faces)
+        
         # Add widgets to layout
         print('Adding Camera widget to layout...')
-        layout.addWidget(zero.get_video_frame())  
+        layout.addWidget(self.camera.get_video_frame())  
         print('Verifying camera credentials...') 
         
         print('Adding Faces recognize widget to layout...')
         layout.addWidget(self.init_regcognize_frame())
-        layout.addWidget(recognize.get_view())
+        layout.addWidget(self.recognize.get_view())
         w = QWidget()
         w.setLayout(layout)
         self.setCentralWidget(w)
