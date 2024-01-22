@@ -1,5 +1,6 @@
 from datetime import datetime
 import logging
+import os
 
 def _setup_logger():
     # Create a custom logger
@@ -7,6 +8,12 @@ def _setup_logger():
 
     # Set the level of logger
     logger.setLevel(logging.DEBUG)
+    
+
+    # Check if the subfolder './logs' exists, if not, create it
+    logs_folder = './logs'
+    if not os.path.exists(logs_folder):
+        os.makedirs(logs_folder)
 
     # Create handler
     file_handler = logging.FileHandler('./logs/logging_{}.log'.format(datetime.now().strftime("%Y%m%d-%H%M%S")))
