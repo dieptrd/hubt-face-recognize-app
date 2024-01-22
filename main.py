@@ -1,19 +1,26 @@
-from PyQt5.QtWidgets import *
-import sys 
+import os
+import sys
 from collections import deque
+
+from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QToolBar, QAction, QWidget, QHBoxLayout, QLabel
+
 from appSettings import settings
 from settingDialog import SettingDialog
 from cameraWidget import CameraWidget
 from FaceRecognize import FaceRecognize
-import os
-import sys  
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = "0"
+from logger import logger
 
-# Write errors to a text file
-sys.stderr = open('error_log.txt', 'w')
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = "0" 
 
-# Subclass QMainWindow to customize your application's main window
 class MainWindow(QMainWindow):
+    """
+    The main window of the application.
+
+    Attributes:
+        camera (CameraWidget): The camera widget for capturing video.
+        recognize (FaceRecognize): The face recognition widget.
+    """
+
     def __init__(self):
         super().__init__()
         global faces 
@@ -35,42 +42,56 @@ class MainWindow(QMainWindow):
             self.onSettingClick(None)
         
         # Create camera widgets
-        print('Creating Camera Widgets...')
+        logger.debug('Creating Camera Widgets...')
         
         self.camera = CameraWidget(500,600, faces, aspect_ratio=True)
         self.recognize = FaceRecognize(faces)
         
         # Add widgets to layout
-        print('Adding Camera widget to layout...')
-        layout.addWidget(self.camera.get_video_frame())  
-        print('Verifying camera credentials...') 
-        
-        print('Adding Faces recognize widget to layout...')
-        layout.addWidget(self.init_regcognize_frame())
+        logger.debug('Adding Camera and Faces recognize widget to layout...')
+        layout.addWidget(self.init_regcognize_video_frame())  
+        logger.debug('Verifying camera credentials...')  
+
         layout.addWidget(self.recognize.get_view())
         w = QWidget()
         w.setLayout(layout)
         self.setCentralWidget(w)
     
-    def onSettingClick(self, s):
+    def onSettingClick(self):
         dlg = SettingDialog(self)
         result = dlg.exec()
         if result:
             dlg.updateChanged()
             if hasattr(self, 'recognize'):
                 self.recognize.load_faces()
-                pass
             if hasattr(self, 'camera'):
                 self.camera.update_recognize()
-                pass 
-        print("dialog result: ", result)
+        logger.debug("dialog result: %s", result)
 
-    def init_regcognize_frame(self):
+    def init_regcognize_video_frame(self):
+        """
+        Initialize the layout for the camera video frame and the face detection frame.
+
+        Returns:
+            QWidget: The widget containing the camera video frame and the face detection frame.
+        """
         _widget = QWidget(self)
         _widget.setLayout(QHBoxLayout())
-        _widget.layout().addWidget(self.camera.get_face_detected_frame())
-        _widget.layout().addWidget(self.recognize.get_recognize_frame())
+        _widget.layout().addWidget(self.camera.get_video_frame())
+        _widget.layout().addWidget(self.init_regcognize_frame()) 
+        return _widget
 
+    def init_regcognize_frame(self):
+        """
+        Initialize the layout for the face detection label and the recognized face frame.
+
+        Returns:
+            QWidget: The widget containing the face detection label and the recognized face frame.
+        """
+        _widget = QWidget(self)
+        _widget.setLayout(QVBoxLayout()) 
+        _widget.layout().addWidget(self.camera.get_face_detected_frame())
+        _widget.layout().addWidget(self.recognize.get_recognize_frame())        
         return _widget
 
 app = QApplication(sys.argv)

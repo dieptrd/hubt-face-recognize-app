@@ -9,6 +9,7 @@ from deepface.commons import functions
 import imutils
 import numpy as np
 from appSettings import settings
+import commons
 class CameraWidget(QtWidgets.QWidget):
     """Independent camera feed
     Uses threading to grab IP camera frames in the background
@@ -86,7 +87,8 @@ class CameraWidget(QtWidgets.QWidget):
                 print(f"Error occurred while getting camera: {str(e)}")
                 return None
             
-        def verify_network_stream(link):
+        def verify_network_stream(link): 
+            self.load_video_thread_count += 1
             """Attempts to receive a frame from given link"""
             if link is None:
                 return False
@@ -98,16 +100,15 @@ class CameraWidget(QtWidgets.QWidget):
         
         while True:
             if self.online:
-                self.spin(5)
+                commons.spin(5)
                 continue
-            self.load_video_thread_count += 1
             self.camera_stream_link = scan_camera_sources()
             if verify_network_stream(self.camera_stream_link):
                 self.capture = cv2.VideoCapture(self.camera_stream_link)
                 self.online = True
             else:
                 print("Camera stream not available.")
-                self.spin(1)
+                commons.spin(1)
                 continue
 
     def get_frame(self):
@@ -125,7 +126,7 @@ class CameraWidget(QtWidgets.QWidget):
                         self.capture.release()
                         self.online = False
                 else:
-                    self.spin(2)
+                    commons.spin(2)
             except AttributeError:
                 pass
     
@@ -143,10 +144,10 @@ class CameraWidget(QtWidgets.QWidget):
         # otherwise, they will be built after cam started and this will cause delays 
         while True:            
             if self.wait_recognize and len(self.faces) >0: 
-                self.spin(1)
+                commons.spin(1)
                 continue
             if len(self.deque) < 1:
-                self.spin(2)
+                commons.spin(2)
                 continue
             try:
                 frame = (self.deque[-1]).copy()
@@ -173,14 +174,8 @@ class CameraWidget(QtWidgets.QWidget):
                     self.face_last.append(item.copy()) 
             except Exception as e:
                 print("Detect face e: ", e)
-                self.spin(1)
-                pass 
-    def spin(self, seconds):
-        """Pause for set amount of seconds, replaces time.sleep so program doesnt stall"""
-
-        time_end = time.time() + seconds
-        while time.time() < time_end:
-            QtWidgets.QApplication.processEvents()
+                commons.spin(1)
+                pass
 
     def set_frame(self):
         """Sets pixmap image to video frame"""
@@ -188,7 +183,7 @@ class CameraWidget(QtWidgets.QWidget):
             def create_connecting_image(width, height):
                 image = np.zeros((height, width, 3), dtype=np.uint8)
                 
-                text = "Attempting to connect to IP camera {}".format("." * (self.load_video_thread_count % 4))
+                text = "Find Camera Source{}".format("." * (self.load_video_thread_count % 4))
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 text_size, _ = cv2.getTextSize(text, font, 1, 2)
                 text_x = (width - text_size[0]) // 2
@@ -200,7 +195,7 @@ class CameraWidget(QtWidgets.QWidget):
             img = QtGui.QImage(connecting_image, connecting_image.shape[1], connecting_image.shape[0], QtGui.QImage.Format_RGB888).rgbSwapped()
             pix = QtGui.QPixmap.fromImage(img)
             self.video_frame.setPixmap(pix)
-            self.spin(1)
+            commons.spin(1)
             return
 
         if self.deque and self.online:
@@ -238,9 +233,11 @@ class CameraWidget(QtWidgets.QWidget):
                 self.detected_frame_tic = 0
             if self.detected_frame_tic != face["tic"]:
                 self.detected_frame_tic = face["tic"]
-                x,y,w,h = face["x"], face["y"], face["w"], face["h"]
-                img_face = face["frame"][y : y + h, x : x + w]  # crop detected face
+                x, y, w, h = face["x"], face["y"], face["w"], face["h"]
+                img_face = face["frame"][y: y + h, x: x + w]  # crop detected face
                 img_face = imutils.resize(img_face, width=200)
+                # cv2.rectangle(img_face, (0, 0), (100,20), color=(66, 66, 66), thickness=-1)
+                cv2.putText(img_face, "Face in stream", (2, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), lineType=cv2.LINE_AA)
                 img_face = QtGui.QImage(img_face, img_face.shape[1], img_face.shape[0], QtGui.QImage.Format_RGB888).rgbSwapped()
                 pix_face = QtGui.QPixmap.fromImage(img_face)
                 self.detected_frame.setPixmap(pix_face)

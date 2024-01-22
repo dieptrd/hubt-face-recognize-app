@@ -11,10 +11,6 @@ from collections import deque
 from deepface import DeepFace
 from deepface.commons import functions, distance
 
-from deepface.detectors import FaceDetector
-
-from retinaface import RetinaFace
-
 from PyQt5 import QtCore, QtWidgets, QtGui
 from importDialog import ImportDialog
 from timebounded import TimeBounded
@@ -25,6 +21,7 @@ from qdrant_client.http.models import Distance, VectorParams, PointStruct
 
 from appSettings import settings
 
+
 class FaceRecognize(QtWidgets.QWidget):
     def __init__(self, faces, parent=None, queue_size=1) -> None:
         super(FaceRecognize, self).__init__(parent)     
@@ -33,7 +30,7 @@ class FaceRecognize(QtWidgets.QWidget):
         self.vector_size = 2622
         local_path="./vectordb"
         time_windows = settings.getint("PROCESSING", "TIME_WINDOWS", fallback=5*60)
-        
+
         self.client = QdrantClient(path=local_path)
 
         if not os.path.isfile(local_path + "/collection/hubt_faces/storage.sqlite"):
@@ -48,7 +45,6 @@ class FaceRecognize(QtWidgets.QWidget):
             vectors_config= VectorParams(size=self.vector_size, distance=Distance.COSINE),
         )
 
-        self.represents = [] #unique face in videos
         self.recognized =  TimeBounded(maxage=time_windows) #unique face in windows time
         self.recognized_items = [] # face list to show
         self.model_name = "VGG-Face"
@@ -91,14 +87,16 @@ class FaceRecognize(QtWidgets.QWidget):
         if rows < recognized:
             # print("Add items")
             while rows < recognized:
-                detected_face, item_instream, item_recognize = self.recognized_items[rows]
-                self.addView(detected_face, item_instream, item_recognize)
+                detected,_in_stream_id, _in_database_id = self.recognized_items[rows]
+                item_instream = self.get_face_in_stream(_in_stream_id)
+                item_indatabase = self.get_face_in_db(_in_database_id)
+                self.addView(detected, item_instream, item_indatabase)
                 rows = (rows+1)
         # update recognize frame view
         if len(self.recognize_frame_queue) > 0 and self.recognize_frame is not None:
             img = self.recognize_frame_queue.pop()
             img = imutils.resize(img, width=200)
-            pix_face = self.convert_cv_qt(img)
+            pix_face = self.convert_cv_qt(img, text="Face Recognized")
             self.recognize_frame.setPixmap(pix_face)
     
     def reload_recognize_thread(self):
@@ -125,16 +123,18 @@ class FaceRecognize(QtWidgets.QWidget):
         self.load_faces()        
         self.recognize_thread.start() 
 
-    def load_faces(self):
-        db = None
+    def load_faces(self):        
         try:
-            #wait recognize thread close
-            
             host = settings.get("VECTORDB","HOST", fallback= "localhost")
             port = settings.getint("VECTORDB","PORT", fallback= 6333)
             db = QdrantClient(host, port=port)
             offset = 0
-
+            #wait recognize thread close
+            class_name = settings.get("APPLICATION", "CLASS_NAME", fallback="")
+            matchs = ["undefined"]
+            if len(class_name) != 0:
+                matchs.append(class_name) 
+            
             while offset != None:
                 points, offset = db.scroll(
                     collection_name=self.collection_name,
@@ -142,7 +142,7 @@ class FaceRecognize(QtWidgets.QWidget):
                         must=[
                             models.FieldCondition(
                                 key="class",
-                                match=models.MatchAny(any=["undefined", "TH14.01"]),
+                                match=models.MatchAny(any=matchs),
                             ),
                         ]
                     ),
@@ -167,7 +167,30 @@ class FaceRecognize(QtWidgets.QWidget):
             if db is not None:
                 db.close()
             self.progress_dialog.close()
-    #find face by ai
+
+    def insert_new_face(self, item):
+        item_insert = PointStruct(
+            id= item.id,
+            vector= item.vector,
+            payload= item.payload,
+        )    
+        #insert to db server
+        host = settings.get("VECTORDB","HOST", fallback= "localhost")
+        port = settings.getint("VECTORDB","PORT", fallback= 6333)
+        db = QdrantClient(host, port=port)
+        db.upsert(
+            collection_name=self.collection_name,
+            points= [item_insert],
+            wait=True
+        ) 
+        db.close()
+        #insert to db local
+        self.client.upsert(
+            collection_name=self.collection_name,
+            points= [item_insert],
+            wait=True
+        )
+
     def recognize(self):        
         while True:
             if self.recognize_thread_wait_stop:
@@ -229,10 +252,16 @@ class FaceRecognize(QtWidgets.QWidget):
                      
                     if (not self.recognized.exists(item.id)):
                         print("detect a new face on camera stream: ", item.id) 
-                        self.recognized.add(item.id, item)                    
-                        item_recognized = self.find_face_in_db(represent=represent[0]["embedding"])
-                        self.recognized_items.append((face_bigger['detected'].copy(), item, item_recognized))
-                        print("3") 
+                        self.recognized.add(item.id, item)
+                        
+                        #check unique face in client db
+                        item_in_db = self.find_face_in_db(represent= item.vector)
+                        if item_in_db is None:
+                            item_in_db = self.find_face_in_db(represent=represent[0]["embedding"])
+                        
+                        recognized_item = (face_bigger['detected'], item.id, item_in_db.id if item_in_db else None)
+                        self.recognized_items.append(recognized_item)
+                        print("recognized_items id: ", item.id)
             except Exception as error:
                 print("recognize error: ", error)
                 self.spin(2)
@@ -277,21 +306,29 @@ class FaceRecognize(QtWidgets.QWidget):
             print("add row error: ", ex)
             pass
     def import_item(self, item):
-        print(f"Item {item.row()}, {item.column()} was double-clicked")
+        def update_item_view(item):
+            item_id = item.id
+            for rowPosition, rowItem in enumerate(self.recognized_items):
+                detected, current_item_instream_id, in_db_item_id = rowItem
+                if current_item_instream_id == item_id and in_db_item_id is None:
+                    self.recognized_items[rowPosition] = (detected, current_item_instream_id, current_item_instream_id)
+                    self.view_widget.setCellWidget(rowPosition, 2, QtWidgets.QLabel(text=str(item.payload["name"])))
+
+            
         row_position = item.row()
-        detected_face, item_instream, item_recognize = self.recognized_items[row_position]
+        _, item_instream_id , item_recognize = self.recognized_items[row_position]
         if item_recognize is None:
             dlg = ImportDialog(self)
             result = dlg.exec()
-            if result and len(dlg.studentId.text()) > 0: 
+            if result and len(dlg.studentId.text()) > 0 and len(dlg.className.text()) > 0: 
+                settings.set("APPLICATION", "CLASS_NAME", dlg.className.text())
+                item_instream = self.get_face_in_stream(item_instream_id)
                 item_instream.payload["id"] = dlg.studentId.text()
-                self.client.upsert(
-                    collection_name=self.collection_name,
-                    points= [item_instream],
-                    wait=True
-                )
-                # self.load_faces()
-                self.recognized_items[row_position] = (detected_face, item_instream, item_instream)
+                item_instream.payload["name"] = dlg.studentName.text()
+                item_instream.payload["class"] = dlg.className.text()
+
+                self.insert_new_face(item_instream)
+                update_item_view(item_instream)
                 print("Add new student success: ", dlg.studentId.text(), item_instream.id)
 
     def _rever_image(self, img):
@@ -302,14 +339,16 @@ class FaceRecognize(QtWidgets.QWidget):
             # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) #convert to rgb image
         return img
     
-    def convert_cv_qt(self, img):
+    def convert_cv_qt(self, img, text=None):
         cv_img = self._rever_image(img)
 
         rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
+        if text is not None:            
+            cv2.putText(rgb_image, text, (2, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), lineType=cv2.LINE_AA)
         convert_to_Qt_format = QtGui.QImage(rgb_image.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
-        p = convert_to_Qt_format.scaled(cv_img.shape[0], cv_img.shape[1], QtCore.Qt.AspectRatioMode.KeepAspectRatio)        
+        p = convert_to_Qt_format.scaled(cv_img.shape[0], cv_img.shape[1], QtCore.Qt.AspectRatioMode.KeepAspectRatio)
         return QtGui.QPixmap.fromImage(p)
     
     def find_face_in_stream(self, represent, face_item):
@@ -340,9 +379,12 @@ class FaceRecognize(QtWidgets.QWidget):
             vector= represent,
             payload= {
                 "class": "undefined",
-                "face_region": {"x":face_item["x"], "y":face_item["y"], "w":face_item["w"], "h":face_item["h"]},
                 "id": "1",
+                "name": "undefined",
                 "type": "unvalidated",
+                "face_region": {"x":face_item["x"], "y":face_item["y"], "w":face_item["w"], "h":face_item["h"]},
+                "face": self.convert_image_base64(face_item["face"]),
+                "detected": self.convert_image_base64(face_item["detected"]),
                 "img": self.convert_image_base64(face_item["frame"])
             },
         )    
@@ -353,10 +395,20 @@ class FaceRecognize(QtWidgets.QWidget):
             points=[item]
         )
         return item
+    
+    def get_face_in_stream(self, id):
+        data =  self.face_in_stream.retrieve(
+            collection_name= self.collection_name, 
+            ids= [id],
+            with_vectors=True,
+            with_payload=True
+        )
+        return data[0] if len(data) > 0 else None
     def convert_image_base64(self, img, ext= ".jpg"):
         a, _ = functions.load_image(img)
         img_base64 = base64.b64encode(cv2.imencode(ext, img)[1]).decode()
         return f'data:image/{ext};base64,' + img_base64
+    
     def find_face_in_db(self, represent):
         data =  self.client.search(
             collection_name= self.collection_name, 
@@ -371,7 +423,7 @@ class FaceRecognize(QtWidgets.QWidget):
         if len(data) > 0:
             item = data[0] 
             throw = 0.1 # distance.findThreshold(model_name=self.model_name, distance_metric= "cosine")
-            d = distance.findCosineDistance(item.vector, represent)  
+            d = distance.findCosineDistance(item.vector, represent)
             # print("search score: ", item.score, d, throw)
             if d < throw: 
                 return (item)
@@ -379,4 +431,23 @@ class FaceRecognize(QtWidgets.QWidget):
         #add item if not found
         print("New face unrecognize!")  
         return(None)
+    
+    def get_face_in_db(self, id):
+        if id is None:
+            return None
+        
+        data =  self.client.retrieve(
+            collection_name= self.collection_name, 
+            ids= [id],
+            with_vectors=True,
+            with_payload=True
+        )
+        return data[0] if len(data) > 0 else None
+    
+    def add_face_in_db(self, item):
+        self.client.upsert(
+            collection_name=self.collection_name,
+            wait=True,
+            points=[item]
+        )
 
