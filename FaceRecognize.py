@@ -31,16 +31,19 @@ class FaceRecognize(QtWidgets.QWidget):
         local_path="./vectordb"
         time_windows = settings.getint("PROCESSING", "TIME_WINDOWS", fallback=5*60)
 
-        self.client = QdrantClient(path=local_path)
+        client_path = os.path.join(local_path,"client")
+        self.client = QdrantClient(path=client_path)
 
-        if not os.path.isfile(local_path + "/collection/hubt_faces/storage.sqlite"):
+        if not os.path.isfile(client_path + "/collection/{}/storage.sqlite".format(self.collection_name)):
             self.client.create_collection(
                 collection_name= self.collection_name,
                 vectors_config= VectorParams(size=self.vector_size, distance=Distance.COSINE),
             )
-
-        self.face_in_stream = QdrantClient(":memory:")
-        self.face_in_stream.create_collection(
+        
+        # self.face_in_stream = QdrantClient(":memory:")
+        in_stream_path = os.path.join(local_path,"in_stream")
+        self.face_in_stream = QdrantClient(path=in_stream_path)
+        self.face_in_stream.recreate_collection(
             collection_name= self.collection_name,
             vectors_config= VectorParams(size=self.vector_size, distance=Distance.COSINE),
         )
@@ -59,6 +62,7 @@ class FaceRecognize(QtWidgets.QWidget):
         self.recognize_frame = None
 
         self.view_widget = QtWidgets.QTableWidget(0, 3)
+        
         self.view_widget.setHorizontalHeaderLabels(["Detected", "In Stream", "In Database"])
         self.view_widget.resizeColumnsToContents()
         self.view_widget.resizeRowsToContents()
@@ -108,7 +112,7 @@ class FaceRecognize(QtWidgets.QWidget):
         self.recognize_thread_wait_stop = False
         self.progress_dialog = QtWidgets.QProgressDialog()
         self.progress_dialog.setLabelText("DB Loading...")
-        self.progress_dialog.setRange(0, 100)
+        self.progress_dialog.setRange(0, 1000)
         self.progress_dialog.setModal(True)
         self.progress_dialog.setCancelButton(None)
         self.progress_dialog.setAutoClose(True)
@@ -130,10 +134,8 @@ class FaceRecognize(QtWidgets.QWidget):
             db = QdrantClient(host, port=port)
             offset = 0
             #wait recognize thread close
-            class_name = settings.get("APPLICATION", "CLASS_NAME", fallback="")
-            matchs = ["undefined"]
-            if len(class_name) != 0:
-                matchs.append(class_name) 
+            matchs = settings.class_name()
+            matchs.append("undefined")
             
             while offset != None:
                 points, offset = db.scroll(
@@ -159,6 +161,7 @@ class FaceRecognize(QtWidgets.QWidget):
                 )
 
                 info = self.client.get_collection(collection_name=self.collection_name)
+                self.progress_dialog.setValue(info.points_count)
                 print("load faces pages: ", info.points_count)
         except Exception as e:
             print("load_faces error: ", e)
@@ -284,10 +287,12 @@ class FaceRecognize(QtWidgets.QWidget):
         
             item = QtWidgets.QLabel("", self)
             item.setPixmap(self.convert_cv_qt(face_icon)) 
+            item.setFixedSize(80, 80)
             item.setScaledContents(True)  
-            
+
             item_f = QtWidgets.QLabel("", self) 
             item_f.setPixmap(self.convert_cv_qt(detected_face)) 
+            item_f.setFixedSize(80, 80)
             item_f.setScaledContents(True)  
 
             item_id = QtWidgets.QLabel()
@@ -297,10 +302,16 @@ class FaceRecognize(QtWidgets.QWidget):
                 item_id.setText(item_recognize.payload["id"])
 
             #add item
-            rowPosition = self.view_widget.rowCount()
+            rowPosition = 0  # Set rowPosition to 0 to insert row at the top
             self.view_widget.insertRow(rowPosition) 
-            self.view_widget.setCellWidget(rowPosition, 0, item_f)
+            self.view_widget.setRowHeight(rowPosition, 80)
+
+            self.view_widget.setColumnWidth(0, 80)
+            self.view_widget.setCellWidget(rowPosition, 0, item_f)  
+
+            self.view_widget.setColumnWidth(1, 80)          
             self.view_widget.setCellWidget(rowPosition, 1, item)
+
             self.view_widget.setCellWidget(rowPosition, 2, item_id)
         except Exception as ex:
             print("add row error: ", ex)
@@ -320,8 +331,7 @@ class FaceRecognize(QtWidgets.QWidget):
         if item_recognize is None:
             dlg = ImportDialog(self)
             result = dlg.exec()
-            if result and len(dlg.studentId.text()) > 0 and len(dlg.className.text()) > 0: 
-                settings.set("APPLICATION", "CLASS_NAME", dlg.className.text())
+            if result and len(dlg.studentId.text()) > 0 and len(dlg.className.text()) > 0:
                 item_instream = self.get_face_in_stream(item_instream_id)
                 item_instream.payload["id"] = dlg.studentId.text()
                 item_instream.payload["name"] = dlg.studentName.text()

@@ -12,6 +12,7 @@ class AppSettings(configparser.ConfigParser):
         with open(self.setting_file, 'w') as configfile:
             self.write(configfile)
         return 1
+    
     def set_deepface_home(self, path=None):
         if not path:
             folder = self.get("GLOBAL", "DEEPFACE_HOME", fallback="./models")
@@ -24,6 +25,7 @@ class AppSettings(configparser.ConfigParser):
         os.environ['DEEPFACE_HOME'] = folder
     def get_deepface_home(self):
         return os.environ['DEEPFACE_HOME']
+    
     def get_full_path(self, dir, *paths):
         path = os.path.join(dir, *paths)
         if(path.startswith('./')):
@@ -39,7 +41,16 @@ class AppSettings(configparser.ConfigParser):
                 parent_dir = subfolder
             path = os.path.join(parent_dir, path[3:])
         return path
+    
+    def class_name(self, class_name = None):   
+        if isinstance(class_name, str):
+            class_name = [name.strip() for name in class_name.split(",")]
         
+        if isinstance(class_name, list):
+            self.set("APPLICATION", "CLASS_NAME", ",".join(class_name))
+        
+        text = self.get("APPLICATION", "CLASS_NAME", fallback="")
+        return text.split(",")
 
 settings = AppSettings()
 print("Environment: ", settings.env)

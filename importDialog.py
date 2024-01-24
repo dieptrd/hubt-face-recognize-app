@@ -19,10 +19,10 @@ class ImportDialog(QDialog):
 
     def _init_DBWidget(self):
         widget = QGroupBox("Add payload info.", self)
-        
-        className = settings.get("APPLICATION", "CLASS_NAME", fallback="")
+        classList = settings.class_name()
+
         layout = QFormLayout()
-        self.className = QLineEdit(className, self)
+        self.className = QLineEdit(classList[0] if len(classList) > 0 else "", self)
         layout.addRow('Class Name:', self.className) 
 
         self.studentId = QLineEdit("", self)  

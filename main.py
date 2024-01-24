@@ -6,11 +6,12 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QToolBar, QA
 
 from appSettings import settings
 from settingDialog import SettingDialog
+from selectClass import SelectClass
 from cameraWidget import CameraWidget
 from FaceRecognize import FaceRecognize
 from logger import logger
 
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = "0" 
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = "0"  
 
 class MainWindow(QMainWindow):
     """
@@ -40,11 +41,15 @@ class MainWindow(QMainWindow):
             settings.set("GLOBAL", "FIRST_RUN", "1")
             settings.update()
             self.onSettingClick(None)
+
+        # show select class dialog
+        dialog = SelectClass(self)
+        dialog.exec()
         
         # Create camera widgets
         logger.debug('Creating Camera Widgets...')
         
-        self.camera = CameraWidget(500,600, faces, aspect_ratio=True)
+        self.camera = CameraWidget(520,600, faces, aspect_ratio=True)
         self.recognize = FaceRecognize(faces)
         
         # Add widgets to layout

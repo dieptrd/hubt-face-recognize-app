@@ -66,14 +66,13 @@ class CameraWidget(QtWidgets.QWidget):
         self.timer.timeout.connect(self.set_frame)
         self.timer.start(2)
 
-        print('Started camera: {}'.format(self.camera_stream_link))
-
     def load_network_stream(self):
         """detect and reconnect network stream if connection is lost"""
         def scan_camera_sources():
             try:
                 camera_sources = []
                 for i in range(10):
+                    self.load_video_thread_count += 1
                     cap = cv2.VideoCapture(i)
                     if cap.isOpened():
                         camera_sources.append(i)
@@ -127,7 +126,12 @@ class CameraWidget(QtWidgets.QWidget):
                         self.online = False
                 else:
                     commons.spin(2)
-            except AttributeError:
+            except Exception as e:
+                print("Get frame e: ", e)
+                if self.capture:
+                    self.capture.release()
+                self.online = False
+                commons.spin(1)
                 pass
     
     def update_recognize(self):
