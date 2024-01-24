@@ -23,6 +23,7 @@ class AppSettings(configparser.ConfigParser):
         if not os.path.exists(folder):
             os.makedirs(folder)
         os.environ['DEEPFACE_HOME'] = folder
+        
     def get_deepface_home(self):
         return os.environ['DEEPFACE_HOME']
     
