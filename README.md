@@ -54,6 +54,10 @@ Follow the steps below to set up and run the application.
     ```bash
     python importApp.py
     ```
+### Build window app
+    ```bash
+     pip install auto-py-to-exe && auto-py-to-exe
+     ```
 
 ### Contributing
 
