@@ -20,7 +20,7 @@ from qdrant_client.http import models
 from qdrant_client.http.models import Distance, VectorParams, PointStruct
 
 from appSettings import settings
-
+from faceCompareWidget import FaceCompareWidget
 
 class FaceRecognize(QtWidgets.QWidget):
     def __init__(self, faces, parent=None, queue_size=1) -> None:
@@ -80,7 +80,7 @@ class FaceRecognize(QtWidgets.QWidget):
     
     def get_recognize_frame(self):
         if self.recognize_frame is None:
-            self.recognize_frame = QtWidgets.QLabel()
+            self.recognize_frame = FaceCompareWidget(self)
         return self.recognize_frame
 
     def set_row(self): 
@@ -98,10 +98,12 @@ class FaceRecognize(QtWidgets.QWidget):
                 rows = (rows+1)
         # update recognize frame view
         if len(self.recognize_frame_queue) > 0 and self.recognize_frame is not None:
-            img = self.recognize_frame_queue.pop()
-            img = imutils.resize(img, width=200)
+            (face_on_cam, item_recognize) = self.recognize_frame_queue.pop()
+            img = imutils.resize(face_on_cam, width=200)
             pix_face = self.convert_cv_qt(img, text="Face Recognized")
-            self.recognize_frame.setPixmap(pix_face)
+            self.recognize_frame.set_camera_face(pix_face)
+            self.recognize_frame.set_info(item_recognize.payload["id"] if item_recognize else "Unrecognized", 
+                                         item_recognize.payload["name"] if item_recognize else "Unrecognized",)
     
     def reload_recognize_thread(self):
         if self.recognize_thread:
@@ -208,6 +210,7 @@ class FaceRecognize(QtWidgets.QWidget):
                     crop = frame[y-int(h/2) : y + h + int(y/2), x-(int(x/4)) : x + w + int(x/2)]  
 
                     #refind face in frame with retinaface methods
+                    # align face for better result
                     face_objs = DeepFace.extract_faces(
                         img_path= crop.copy(),
                         target_size= functions.find_target_size(self.model_name),
@@ -226,7 +229,7 @@ class FaceRecognize(QtWidgets.QWidget):
                             if face_width <  facial_area["w"]:
                                 face_width =  facial_area["w"]
                                 face_bigger = facial_area
-                                face_mark = face_obj["face"]
+                                face_bigger['face'] = face_obj["face"].copy()
                     
                     if face_bigger is None:
                         raise Exception("Face not found.")
@@ -235,23 +238,23 @@ class FaceRecognize(QtWidgets.QWidget):
                     x,y,w,h = face_bigger["x"], face_bigger["y"], face_bigger["w"], face_bigger["h"]
                     face_bigger['frame'] = crop
                     face_bigger['detected'] = crop[y : y + h, x : x + w]
-                    face_bigger['face'] = face_mark.copy()
+                    face_mark = face_bigger['face'].copy()
 
-                    # save face to show on UI
-                    self.recognize_frame_queue.append(face_mark.copy()) 
+                    #align face
 
                     #convert finded face to vector
                     represent = DeepFace.represent(                        
-                        img_path= face_mark.copy(),
+                        img_path= face_mark,
                         model_name= self.model_name,
                         enforce_detection= False, 
                         align= True,
                         normalization="VGGFace",
                         detector_backend= "skip"
                     ) 
-                    
+
+                    item_in_db = None
                     #check unique face in stream
-                    item = self.find_face_in_stream(represent=represent[0]["embedding"], face_item = face_bigger) 
+                    item = self.find_face_in_stream(represent=represent[0]["embedding"], face_item = face_bigger)
                      
                     if (not self.recognized.exists(item.id)):
                         print("detect a new face on camera stream: ", item.id) 
@@ -265,6 +268,10 @@ class FaceRecognize(QtWidgets.QWidget):
                         recognized_item = (face_bigger['detected'], item.id, item_in_db.id if item_in_db else None)
                         self.recognized_items.append(recognized_item)
                         print("recognized_items id: ", item.id)
+                    
+
+                    # save face to show on UI
+                    self.recognize_frame_queue.append((face_bigger['detected'].copy(), item_in_db))
             except Exception as error:
                 print("recognize error: ", error)
                 self.spin(2)

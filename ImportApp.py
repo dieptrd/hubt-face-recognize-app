@@ -9,7 +9,6 @@ import time
 import uuid
 import numpy as np
 import cv2
-from PIL import Image
 import base64
 import json
 
@@ -295,13 +294,13 @@ class MainWindow(QMainWindow):
                 )
 
                 for img_obj in img_objs:
-                    img_region = img_obj["facial_area"]
+                    
+                    face_img_embed = img_obj["face"] # face image after alignment, resizing                    
                     embedding_obj = DeepFace.represent(
-                        img_path=img_obj["face"],
+                        img_path=face_img_embed,
                         model_name=model_name,
                         enforce_detection=True,
                         detector_backend="skip",
-                        align=True,
                     )
 
                     img_representation = embedding_obj[0]["embedding"]
@@ -311,9 +310,10 @@ class MainWindow(QMainWindow):
                     instance = {
                         "img": img_base64,
                         "id": id,
-                        "face_region": img_region.copy(),
+                        "face_embed": face_img_embed.copy(),
                         "type": "validated",
-                        "class": class_name
+                        "class": class_name,
+                        "model": model_name,
                     }
                     item = {"represent": img_representation, "instance": instance}
                     self.upssert_item(item, client) 

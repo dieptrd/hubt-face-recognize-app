@@ -40,8 +40,7 @@ class MainWindow(QMainWindow):
         if first_run == "0":
             settings.set("GLOBAL", "FIRST_RUN", "1")
             settings.update()
-            self.onSettingClick(None)
-
+            self.onSettingClick()
         # show select class dialog
         dialog = SelectClass(self)
         dialog.exec()
@@ -95,7 +94,7 @@ class MainWindow(QMainWindow):
         """
         _widget = QWidget(self)
         _widget.setLayout(QVBoxLayout()) 
-        _widget.layout().addWidget(self.camera.get_face_detected_frame())
+        # _widget.layout().addWidget(self.camera.get_face_detected_frame())
         _widget.layout().addWidget(self.recognize.get_recognize_frame())        
         return _widget
 

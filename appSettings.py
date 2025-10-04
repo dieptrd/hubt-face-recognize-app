@@ -2,6 +2,7 @@ import os
 import re
 import configparser
 from pathlib import Path
+from logger import logger
 class AppSettings(configparser.ConfigParser):
     def __init__(self, env="development"):
         super().__init__()
@@ -54,4 +55,5 @@ class AppSettings(configparser.ConfigParser):
         return text.split(",")
 
 settings = AppSettings()
+logger.debug('Settings loaded from %s', settings.setting_file)
 print("Environment: ", settings.env)
