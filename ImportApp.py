@@ -16,7 +16,8 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams, PointStruct
 
 from deepface import DeepFace
-from deepface.commons import functions
+from deepface.models.FacialRecognition import FacialRecognition
+from deepface.commons.image_utils import load_image
 
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = "0"
  
@@ -268,8 +269,8 @@ class MainWindow(QMainWindow):
         try:
             # build models once to store them in the memory
             # otherwise, they will be built after cam started and this will cause delays
-            DeepFace.build_model(model_name=self.configs.get("model_name"))
-            target_size = functions.find_target_size(model_name=model_name)
+            model: FacialRecognition = DeepFace.build_model(task="facial_recognition", model_name=model_name)
+            target_size = model.input_shape
 
             client = QdrantClient(self.configs.get("db_host"), port= int(self.configs.get("db_port")))
 
@@ -295,16 +296,13 @@ class MainWindow(QMainWindow):
 
                 for img_obj in img_objs:
                     
-                    face_img_embed = img_obj["face"] # face image after alignment, resizing                    
-                    embedding_obj = DeepFace.represent(
-                        img_path=face_img_embed,
-                        model_name=model_name,
-                        enforce_detection=True,
-                        detector_backend="skip",
-                    )
-
-                    img_representation = embedding_obj[0]["embedding"]
-                    img, _ = functions.load_image(employee)
+                    face_img_embed = img_obj["face"] # face image after alignment, resizing
+                    face_img_embed = cv2.resize(face_img_embed, target_size)
+                    face_img_embed = np.expand_dims(face_img_embed, axis=0)  # to (1, 224, 224, 3)
+                    embedding_obj = model.forward(face_img_embed)   
+                      
+                    img_representation = np.array(embedding_obj)        
+                    img, _ = load_image(employee)
                     img_base64 = f'data:image/{ext};base64,' + base64.b64encode(cv2.imencode(ext, img)[1]).decode()
                     self.import_image_queue.append(img_base64)
                     instance = {
@@ -374,7 +372,7 @@ class MainWindow(QMainWindow):
     
     def update_UI(self):
         if len(self.import_image_queue) > 0:
-            img, _ = functions.load_image(self.import_image_queue.pop())
+            img, _ = load_image(self.import_image_queue.pop())
             pix = self.convert_cv_qt(img)
             self.import_image.setPixmap(pix)
 
