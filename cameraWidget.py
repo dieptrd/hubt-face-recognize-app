@@ -178,6 +178,7 @@ class CameraWidget(QtWidgets.QWidget):
                     self.face_last.append(item.copy()) 
             except Exception as e:
                 print("Detect face e: ", e)
+                
                 commons.spin(1)
                 pass
 

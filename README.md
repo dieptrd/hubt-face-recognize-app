@@ -24,18 +24,24 @@ Follow the steps below to set up and run the application.
 3. Create a virtual environment:
 
     ```bash
-    python -m venv venv
+    python -m venv .venv
     ```
 
 4. Activate the virtual environment:
 
     ```bash
-    source venv/bin/activate
+    # For Linux/macOS
+    source .venv/bin/activate
+    # For Windows (PowerShell)
+    .venv\Scripts\Activate.ps1
     ```
 
 5. Install the required dependencies:
 
     ```bash
+    # Install pip if not already installed
+    python -m pip install --upgrade pip
+    # Install the required dependencies
     pip install -r requirements.txt
     ```
 

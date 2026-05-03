@@ -1,0 +1,8 @@
+python-dotenv>=1.0.1
+opencv-python>=4.5.5.64
+PyQt5
+deepface
+imutils
+numpy
+tensorflow>=2.12.0
+tf-keras
