@@ -27,7 +27,6 @@ class CameraWidget(QtWidgets.QWidget):
         self.deque = deque(maxlen=deque_size)
         self.faces = faces
         self.face_confidence = face_confidence_threshold
-        self.face_last = deque(maxlen=2)
         # Slight offset is needed since PyQt layouts have a built in padding
         # So add offset to counter the padding 
         self.offset = 16
@@ -127,7 +126,7 @@ class CameraWidget(QtWidgets.QWidget):
                 else:
                     commons.spin(2)
             except Exception as e:
-                print("Get frame e: ", e)
+                print("E:get_frame - ", e)
                 if self.capture:
                     self.capture.release()
                 self.online = False
@@ -141,6 +140,32 @@ class CameraWidget(QtWidgets.QWidget):
         print(f'detector: {self.detector_backend}, model: {self.model_name}, slow: {self.wait_recognize}')
         DeepFace.build_model(model_name= self.model_name)
         self.target_size = functions.find_target_size(model_name= self.model_name)
+
+    def get_largest_face(faces):
+        if not faces: return None
+        return max(faces, key=lambda face: (face["facial_area"]["w"] * face["facial_area"]["h"]))
+    
+    def calculate_face_iou(face, face_last):
+        x1, y1, w1, h1 = face["x"], face["y"], face["w"], face["h"]
+        x2, y2, w2, h2 = face_last["x"], face_last["y"], face_last["w"], face_last["h"]
+
+        # Calculate the (x, y)-coordinates of the intersection rectangle
+        xA = max(x1, x2)
+        yA = max(y1, y2)
+        xB = min(x1 + w1, x2 + w2)
+        yB = min(y1 + h1, y2 + h2)
+
+        # Compute the area of intersection rectangle
+        interArea = max(0, xB - xA) * max(0, yB - yA)
+
+        # Compute the area of both the prediction and ground-truth rectangles
+        boxAArea = w1 * h1
+        boxBArea = w2 * h2
+
+        # Compute the intersection over union by taking the intersection area and dividing it by the sum of prediction + ground-truth areas - the interesection area
+        iou = interArea / float(boxAArea + boxBArea - interArea)
+
+        return iou
 
     def detect_face(self):
         """get face from frame""" 
@@ -160,22 +185,17 @@ class CameraWidget(QtWidgets.QWidget):
                     target_size=self.target_size,
                     detector_backend=self.detector_backend,
                     enforce_detection=False,
-                    align=False
+                    align=True
                 ) 
-                w_bigger = 0
-                face_bigger = None
-                for face_obj in face_objs:
-                    facial_area = face_obj["facial_area"]
-                    if facial_area["w"] > 50 and face_obj["confidence"] > self.face_confidence:
-                        if w_bigger < facial_area["w"]:
-                            w_bigger = facial_area["w"] 
-                            face_bigger = facial_area.copy()
-                if w_bigger > 0:
+                face_bigger = self.get_largest_face(face_objs) 
+                if face_bigger :
                     item = face_bigger.copy()
                     item['frame'] = frame.copy()
                     item["tic"] = time.time()
+                    face_last = self.faces[-1].copy() if len(self.faces) > 0 else None
+                    if face_last is not None:
+                        item["iou"] = self.calculate_face_iou(item, face_last) 
                     self.faces.append(item.copy())
-                    self.face_last.append(item.copy()) 
             except Exception as e:
                 print("Detect face e: ", e)
                 
@@ -184,6 +204,7 @@ class CameraWidget(QtWidgets.QWidget):
 
     def set_frame(self):
         """Sets pixmap image to video frame"""
+        face = self.faces[-1].copy() if len(self.faces) > 0 else None
         if not self.online:
             def create_connecting_image(width, height):
                 image = np.zeros((height, width, 3), dtype=np.uint8)
@@ -206,16 +227,14 @@ class CameraWidget(QtWidgets.QWidget):
         if self.deque and self.online:
             # Grab latest frame
             frame = (self.deque[-1]).copy()
-            if len(self.face_last) > 0:
-                face = self.face_last[-1]
-                if time.time() - face['tic'] < 5:
-                    x = face["x"]
-                    y = face["y"]
-                    w = face["w"]
-                    h = face["h"]
-                    cv2.rectangle(
-                        frame, (x, y), (x + w, y + h), (67, 67, 67), 1
-                    )  # draw rectangle to main image
+            if face is not None and time.time() - face['tic'] < 5: # only draw face box if detected in the last 5 seconds
+                x = face["x"]
+                y = face["y"]
+                w = face["w"]
+                h = face["h"]
+                cv2.rectangle(
+                    frame, (x, y), (x + w, y + h), (67, 67, 67), 1
+                )  # draw rectangle to main image
             # Keep frame aspect ratio
             if self.maintain_aspect_ratio:
                 self.frame = imutils.resize(frame, width=self.screen_width)
@@ -232,8 +251,7 @@ class CameraWidget(QtWidgets.QWidget):
             pix = QtGui.QPixmap.fromImage(img)
             self.video_frame.setPixmap(pix)
 
-        if len(self.face_last) > 0 and self.detected_frame is not None:
-            face = (self.face_last[-1]).copy()
+        if face is not None and self.detected_frame is not None: 
             if not hasattr(self, "detected_frame_tic"):
                 self.detected_frame_tic = 0
             if self.detected_frame_tic != face["tic"]:

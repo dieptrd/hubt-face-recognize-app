@@ -40,7 +40,7 @@ Follow the steps below to set up and run the application.
 
     ```bash
     # Install pip if not already installed
-    python -m pip install --upgrade pip
+    python3.10 -m pip install --upgrade pip
     # Install the required dependencies
     pip install -r requirements.txt
     ```
@@ -50,7 +50,8 @@ Follow the steps below to set up and run the application.
 1. Run the main application:
 
     ```bash
-    python main.py
+    python3.10 -m venv .venv && source .venv/bin/activate
+    python3.10 main.py
     ```
 
 2. Run the data update application:

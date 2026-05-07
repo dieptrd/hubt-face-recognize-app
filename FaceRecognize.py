@@ -201,47 +201,32 @@ class FaceRecognize(QtWidgets.QWidget):
             if self.recognize_thread_wait_stop:
                 break 
             try:
-                if(len(self.faces) > 0):
+                if(len(self.faces) > 1):
                     #crop full face with background
                     face = self.faces.pop()
+                    # check threshold of iou to avoid false positive when detect face with retinaface method
+                    if(face.get("iou", 0) < 0.8):
+                        raise Exception("Face detected with low confidence, skip recognize")
+                    
+                    # check threshold confident
+                    if(face.get("confidence", 0) < 0.8):
+                        raise Exception("Face detected with low confidence, skip recognize")
+                    
                     frame = face['frame']
                     # crop detected face with some outsize
+                    face_mark = face["face"].copy()
                     x,y,w,h = face["x"], face["y"], face["w"], face["h"]
                     crop = frame[y-int(h/2) : y + h + int(y/2), x-(int(x/4)) : x + w + int(x/2)]  
-
-                    #refind face in frame with retinaface methods
-                    # align face for better result
-                    face_objs = DeepFace.extract_faces(
-                        img_path= crop.copy(),
-                        target_size= functions.find_target_size(self.model_name),
-                        enforce_detection= True, 
-                        align= True,
-                        detector_backend= "retinaface", #skip
-                    )
-
-                    #get bigger face
-                    face_width = 0
-                    face_bigger = None
-                    face_mark = None
-                    for face_obj in face_objs:
-                        facial_area = face_obj["facial_area"]
-                        if facial_area["w"] > 50 and face_obj["confidence"] > 0.99:
-                            if face_width <  facial_area["w"]:
-                                face_width =  facial_area["w"]
-                                face_bigger = facial_area
-                                face_bigger['face'] = face_obj["face"].copy()
-                    
-                    if face_bigger is None:
-                        raise Exception("Face not found.")
-                    
-                    #crop face
-                    x,y,w,h = face_bigger["x"], face_bigger["y"], face_bigger["w"], face_bigger["h"]
-                    face_bigger['frame'] = crop
-                    face_bigger['detected'] = crop[y : y + h, x : x + w]
-                    face_mark = face_bigger['face'].copy()
-
+ 
                     #align face
-
+                    #resize face to target size
+                    face_mark = functions.preprocess_face(
+                        img=face_mark, 
+                        target_size= DeepFace.build_model(self.model_name).input_shape[0:2], 
+                        detector_backend= "skip", 
+                        enforce_detection= False, 
+                        align= True
+                    )
                     #convert finded face to vector
                     represent = DeepFace.represent(                        
                         img_path= face_mark,
@@ -253,25 +238,18 @@ class FaceRecognize(QtWidgets.QWidget):
                     ) 
 
                     item_in_db = None
-                    #check unique face in stream
-                    item = self.find_face_in_stream(represent=represent[0]["embedding"], face_item = face_bigger)
+                    #check unique face in local db
+                    item = self.find_face_in_db(represent= item.vector)
                      
                     if (not self.recognized.exists(item.id)):
                         print("detect a new face on camera stream: ", item.id) 
                         self.recognized.add(item.id, item)
+                         
                         
-                        #check unique face in client db
-                        item_in_db = self.find_face_in_db(represent= item.vector)
-                        if item_in_db is None:
-                            item_in_db = self.find_face_in_db(represent=represent[0]["embedding"])
-                        
-                        recognized_item = (face_bigger['detected'], item.id, item_in_db.id if item_in_db else None)
+                        recognized_item = (face.copy(), item.id, item)
                         self.recognized_items.append(recognized_item)
-                        print("recognized_items id: ", item.id)
-                    
-
-                    # save face to show on UI
-                    self.recognize_frame_queue.append((face_bigger['detected'].copy(), item_in_db))
+                        print("recognized_items id: ", item.id)  
+                        
             except Exception as error:
                 print("recognize error: ", error)
                 self.spin(2)
