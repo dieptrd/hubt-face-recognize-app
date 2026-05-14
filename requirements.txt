@@ -8,3 +8,6 @@ tensorflow
 tf-keras
 onnxruntime
 qdrant-client
+dlib
+mediapipe
+torch

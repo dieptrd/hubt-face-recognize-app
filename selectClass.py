@@ -13,8 +13,8 @@ class SelectClass(QDialog):
         super().__init__(parent)   
 
         self.setWindowTitle("Select Class")
-        
-        self.collection_name="hubt_faces"
+
+        self.collection_name= settings.get("VECTORDB","COLLECTION_NAME", fallback="hubt_faces")
 
         self.buttonBox = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.buttonBox.accepted.connect(self.accept)
@@ -101,7 +101,7 @@ class SelectClass(QDialog):
             self._db = QdrantClient(host, port=port)
             try:
                 r = self._db.get_collection(self.collection_name)
-                # self.logs.setText("Collection status is: {}".format(r.status))
+                self.logs.setText("Collection status is: {}".format(r.status))
             except:
                 self.logs.setText("Can not connect to DB")
                 return None

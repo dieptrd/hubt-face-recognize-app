@@ -1,43 +1,109 @@
+import os
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from qdrant_client.http.models import Distance, VectorParams, PointStruct
-class FaceRecognize:
-    def load_faces(self):
-        vector_size = 2622
-        collection_name="hubt_faces"
-        db = QdrantClient("localhost", port=6333)
-        offset = 0
+from appSettings import settings
 
-        self.client = QdrantClient(":memory:")
-        self.client.create_collection(
-            collection_name= collection_name,
-            vectors_config= VectorParams(size=vector_size, distance=Distance.COSINE),
+class DbProvider:
+    def __init__(self):
+        self.client = None
+        self.db = None
+        self.reload_db()
+    
+    def reload_db(self):
+        self.host = settings.get("VECTORDB","HOST", fallback= "localhost")
+        self.port = settings.getint("VECTORDB","PORT", fallback= 6333)
+        self.collection_name = settings.get("VECTORDB", "COLLECTION_NAME", fallback="hubt_faces")
+        self.vector_size = settings.getint("VECTORDB", "VECTOR_SIZE", fallback= 4096) 
+        self.db = None
+        if self.client is not None:
+            self.clear_client()
+    
+    def get_client(self):
+        if self.client is None:
+            client_path = os.path.join("./vectordb","client") 
+            self.client = QdrantClient(path=client_path)
+            if not os.path.isfile(client_path + "/collection/{}/storage.sqlite".format(self.collection_name)):
+                self.client.create_collection(
+                    collection_name= self.collection_name,
+                    vectors_config= VectorParams(size=self.vector_size, distance=Distance.COSINE),
+                )
+        return self.client
+    
+    def clear_client(self):
+        client = self.get_client()
+        try:
+            client.delete_collection(collection_name=self.collection_name)
+            print("Local collection '{}' cleared".format(self.collection_name))
+        except Exception as e:
+            print("Error clearing local DB: ", e)
+        self.client = None
+        
+    def get_all_faces_client(self):
+        client = self.get_client()
+        if client is None:
+            return []
+        points, _ = client.scroll(
+            collection_name=self.collection_name,
+            offset=0,
+            limit=10000,
+            with_payload=True,
+            with_vectors=True,
         )
+        return points
 
+    def get_db(self):
+        try:
+            if self.db is None: 
+                self.db = QdrantClient(self.host, port=self.port)
+            # Ensure remote collection exists; create it if missing
+            try:
+                self.db.get_collection(collection_name=self.collection_name)
+                print("Remote collection '{}' exists".format(self.collection_name))
+            except Exception:
+                print("Remote collection '{}' not found, creating...".format(self.collection_name))
+                self.db.create_collection(
+                    collection_name=self.collection_name,
+                    vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
+                )
+            return self.db
+        except Exception as e:
+            print("Error connecting to DB: ", e)
+            return None
+
+    def load_all_faces_with_filter(self, key="msv", filter_list=None):
+        """Load faces from remote Qdrant DB and upsert to local in-memory Qdrant DB for fast access
+            kwargs:
+                filter_list: list of values to filter by, default is ["undefined", "TH14.01"]
+        """
+        db = self.get_db()
+        client = self.get_client()
+        offset = 0
+        scroll_filter = None
+        if filter_list is not None:
+            scroll_filter = models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key=key,
+                        match=models.MatchAny(any=filter_list),
+                    ),
+                ]
+            )
+            
         while offset != None:
             points, offset = db.scroll(
-                collection_name=collection_name,
-                scroll_filter=models.Filter(
-                    must=[
-                        models.FieldCondition(
-                            key="class",
-                            match=models.MatchAny(any=["undefined", "TH14.01"]),
-                        ),
-                    ]
-                ),
+                collection_name=self.collection_name,
+                scroll_filter=scroll_filter,
                 offset=offset,
                 limit=100,
                 with_payload=True,
                 with_vectors=True,
             )
-            p = points[0]
-            print(p.payload["img"])
-            self.client.upsert(
-                collection_name=collection_name,
+            
+            client.upsert(
+                collection_name=self.collection_name,
                 wait=True,
                 points=points
             )
-            print(offset)
-
-d = FaceRecognize()
-d.load_faces()
+            print("Upserted points, new offset:", offset, "total points upserted:", len(points))
+ 

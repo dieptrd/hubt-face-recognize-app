@@ -1,3 +1,4 @@
+import uuid
 from PyQt5 import QtCore, QtWidgets, QtGui 
 from threading import Thread
 from collections import deque
@@ -5,11 +6,13 @@ from datetime import datetime
 import time
 import cv2
 from deepface import DeepFace
-from deepface.commons import functions
+import importlib
 import imutils
 import numpy as np
 from appSettings import settings
 import commons
+from logger import logger
+
 class CameraWidget(QtWidgets.QWidget):
     """Independent camera feed
     Uses threading to grab IP camera frames in the background
@@ -20,12 +23,14 @@ class CameraWidget(QtWidgets.QWidget):
     @param detector_backend (string): set face detector backend to opencv, retinaface, mtcnn, ssd, dlib, mediapipe or yolov8.
     """
 
-    def __init__(self, width, height, faces, aspect_ratio=False, parent=None, deque_size=1, face_confidence_threshold=0.99):
+    def __init__(self, width, height, faces, face_recognized, aspect_ratio=False, parent=None, deque_size=1, face_confidence_threshold=0.7):
         super(CameraWidget, self).__init__(parent)
         
         # Initialize deque used to store frames read from the stream
         self.deque = deque(maxlen=deque_size)
         self.faces = faces
+        self.face_recognized = face_recognized
+        self.last_face = deque(maxlen=1)
         self.face_confidence = face_confidence_threshold
         # Slight offset is needed since PyQt layouts have a built in padding
         # So add offset to counter the padding 
@@ -138,14 +143,13 @@ class CameraWidget(QtWidgets.QWidget):
         self.model_name = settings.get("PROCESSING", "RECOGNIZE_METHOD", fallback="VGG-Face")
         self.wait_recognize = settings.get("PROCESSING", "WAIT_RECOGNIZED", fallback="True") == "True"
         print(f'detector: {self.detector_backend}, model: {self.model_name}, slow: {self.wait_recognize}')
-        DeepFace.build_model(model_name= self.model_name)
-        self.target_size = functions.find_target_size(model_name= self.model_name)
+        DeepFace.build_model(model_name=self.model_name)
 
-    def get_largest_face(faces):
+    def get_largest_face(self, faces):
         if not faces: return None
         return max(faces, key=lambda face: (face["facial_area"]["w"] * face["facial_area"]["h"]))
-    
-    def calculate_face_iou(face, face_last):
+
+    def calculate_face_iou(self, face, face_last):
         x1, y1, w1, h1 = face["x"], face["y"], face["w"], face["h"]
         x2, y2, w2, h2 = face_last["x"], face_last["y"], face_last["w"], face_last["h"]
 
@@ -171,6 +175,7 @@ class CameraWidget(QtWidgets.QWidget):
         """get face from frame""" 
         # build models once to store them in the memory
         # otherwise, they will be built after cam started and this will cause delays 
+        num_frames_with_faces = 0
         while True:            
             if self.wait_recognize and len(self.faces) >0: 
                 commons.spin(1)
@@ -180,31 +185,93 @@ class CameraWidget(QtWidgets.QWidget):
                 continue
             try:
                 frame = (self.deque[-1]).copy()
+                t = time.time()
                 face_objs = DeepFace.extract_faces(
                     img_path=frame.copy(),
-                    target_size=self.target_size,
                     detector_backend=self.detector_backend,
                     enforce_detection=False,
+                    color_face="bgr",
                     align=True
                 ) 
+                t = time.time() - t
+                # print("Face detection time: ", t)
                 face_bigger = self.get_largest_face(face_objs) 
-                if face_bigger :
+                
+                if face_bigger and face_bigger.get("confidence", 0) >= self.face_confidence:
                     item = face_bigger.copy()
+                    item['face_crop'] = frame[item['facial_area']['y']: item['facial_area']['y'] + item['facial_area']['h'], item['facial_area']['x']: item['facial_area']['x'] + item['facial_area']['w']] 
                     item['frame'] = frame.copy()
                     item["tic"] = time.time()
-                    face_last = self.faces[-1].copy() if len(self.faces) > 0 else None
-                    if face_last is not None:
-                        item["iou"] = self.calculate_face_iou(item, face_last) 
-                    self.faces.append(item.copy())
+                    item["detect_time"] = t
+
+                    face_last = self.last_face[-1] if len(self.last_face) > 0 else None
+                    item["iou"] = self.calculate_face_iou(item['facial_area'], face_last['facial_area']) if face_last is not None else 0
+                    
+                    if((num_frames_with_faces > 0 and item["iou"] < 0.5) or num_frames_with_faces <1):
+                        # if the detected face is very different from the last detected face, reset the counter, this can help reduce false positives when using retinaface detector
+                        num_frames_with_faces = 1
+                        logger.warning("Face detected with low iou area %s, reset num_frames_with_faces counter", item.get("iou", 0))
+                        item["seq_id"] = str(uuid.uuid4())
+                    else:
+                        num_frames_with_faces = num_frames_with_faces + 1
+                        item["seq_id"] = face_last.get("seq_id", str(uuid.uuid4())) if face_last is not None else str(uuid.uuid4())
+                    
+                    item["num_frames_with_faces"] = num_frames_with_faces 
+                    logger.info("Detect face %s: tic: %s, iou: %s", num_frames_with_faces, item['tic'], item.get("iou", None))
+                    self.last_face.append(item)
+                    # only append face if it has been detected in consecutive frames or has high confidence, this can help reduce false positives when using retinaface detector
+                    if num_frames_with_faces % 5 == 0 and item.get("iou", 0) >= 0.7:
+                        self.faces.append(item.copy())
+                else:
+                    print("Face detection failed: %s", time.time())
+                    num_frames_with_faces = 0
+                    self.last_face.append(None)
+
             except Exception as e:
                 print("Detect face e: ", e)
                 
                 commons.spin(1)
                 pass
 
+    def face_tracking(self):
+        """track face in the stream, return the latest position of the face"""
+        last_face = self.last_face[-1] if len(self.last_face) > 0 else None
+
+    showing_face_seq = ""
+    
+    def _safe_get(self, obj, *keys):
+        try:
+            cur = obj
+            for key in keys:
+                if cur is not None and isinstance(cur, dict):
+                    cur = cur.get(key, None)
+                elif hasattr(cur, key):
+                    cur = getattr(cur, key)
+                else:
+                    return None
+            return cur
+        except Exception as e:
+            print("Error in _safe_get: ", e)
+            return None
+
+    def get_face_note_text(self,face):
+        face_recognized_item = self.face_recognized[-1] if len(self.face_recognized) > 0 else None
+        face_recognized_seq_id = face_recognized_item.get("seq_id", "") if face_recognized_item is not None else ""
+        face_recognized = self._safe_get(face_recognized_item, "recognized")
+        recognized_msv = self._safe_get(face_recognized_item, "recognized", "payload", "msv")
+
+        face_seq_id = face.get("seq_id", "") if face is not None else ""
+        seq_last8 = face_seq_id[-8:] if face_seq_id else ""
+        
+        if face_recognized is not None and face_recognized_seq_id == face_seq_id:
+            return "Recognized: {}".format(recognized_msv or seq_last8)
+                
+        if face is not None: 
+            return "Face {}: {}".format(seq_last8, face["num_frames_with_faces"])
+        return ""
+
     def set_frame(self):
         """Sets pixmap image to video frame"""
-        face = self.faces[-1].copy() if len(self.faces) > 0 else None
         if not self.online:
             def create_connecting_image(width, height):
                 image = np.zeros((height, width, 3), dtype=np.uint8)
@@ -224,30 +291,40 @@ class CameraWidget(QtWidgets.QWidget):
             commons.spin(1)
             return
 
+        face = self.last_face[-1] if len(self.last_face) > 0 else None
+        seq_id = face.get("seq_id", "") if face is not None else ""
+        face_area = face['facial_area'] if face is not None else None
+        frame = None
         if self.deque and self.online:
             # Grab latest frame
             frame = (self.deque[-1]).copy()
-            if face is not None and time.time() - face['tic'] < 5: # only draw face box if detected in the last 5 seconds
-                x = face["x"]
-                y = face["y"]
-                w = face["w"]
-                h = face["h"]
+            
+        if self.wait_recognize and face is not None:
+            # show "wait recognize" text if face is detected but not yet recognized
+            frame = face.get("frame", None)
+            
+        if frame is not None:
+            if face is not None and (time.time() - face['tic'] < 2000 or self.wait_recognize): # only draw face box if detected in the last 2 seconds
+                x, y, w, h = face_area["x"], face_area["y"], face_area["w"], face_area["h"]
                 cv2.rectangle(
-                    frame, (x, y), (x + w, y + h), (67, 67, 67), 1
+                    frame, (x, y), (x + w, y + h), (67, 67, 67), 2
                 )  # draw rectangle to main image
+                #draw text under face box
+                cv2.rectangle(frame, (x, y + h), (x + w, y + h + 34), color=(67,67,67), thickness=-1)
+                cv2.putText(frame, self.get_face_note_text(face), (x+10, y + h + 26), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), lineType=cv2.LINE_AA)
             # Keep frame aspect ratio
             if self.maintain_aspect_ratio:
-                self.frame = imutils.resize(frame, width=self.screen_width)
+                frame = imutils.resize(frame, width=self.screen_width)
             # Force resize
             else:
-                self.frame = cv2.resize(frame, (self.screen_width, self.screen_height))
+                frame = cv2.resize(frame, (self.screen_width, self.screen_height))
 
             # Add timestamp to cameras
-            cv2.rectangle(self.frame, (self.screen_width-190,0), (self.screen_width,50), color=(0,0,0), thickness=-1)
-            cv2.putText(self.frame, datetime.now().strftime('%H:%M:%S'), (self.screen_width-185,37), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255,255,255), lineType=cv2.LINE_AA)
+            cv2.rectangle(frame, (self.screen_width-190,0), (self.screen_width,50), color=(0,0,0), thickness=-1)
+            cv2.putText(frame, datetime.now().strftime('%H:%M:%S'), (self.screen_width-185,37), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255,255,255), lineType=cv2.LINE_AA)
 
             # Convert to pixmap and set to video frame
-            img = QtGui.QImage(self.frame, self.frame.shape[1], self.frame.shape[0], QtGui.QImage.Format_RGB888).rgbSwapped()
+            img = QtGui.QImage(frame, frame.shape[1], frame.shape[0], QtGui.QImage.Format_RGB888).rgbSwapped()
             pix = QtGui.QPixmap.fromImage(img)
             self.video_frame.setPixmap(pix)
 
@@ -256,7 +333,7 @@ class CameraWidget(QtWidgets.QWidget):
                 self.detected_frame_tic = 0
             if self.detected_frame_tic != face["tic"]:
                 self.detected_frame_tic = face["tic"]
-                x, y, w, h = face["x"], face["y"], face["w"], face["h"]
+                x, y, w, h = face_area["x"], face_area["y"], face_area["w"], face_area["h"]
                 img_face = face["frame"][y: y + h, x: x + w]  # crop detected face
                 img_face = imutils.resize(img_face, width=200)
                 # cv2.rectangle(img_face, (0, 0), (100,20), color=(66, 66, 66), thickness=-1)
@@ -265,6 +342,8 @@ class CameraWidget(QtWidgets.QWidget):
                 pix_face = QtGui.QPixmap.fromImage(img_face)
                 self.detected_frame.setPixmap(pix_face)
 
+        if face is not None and seq_id != self.showing_face_seq:
+            self.showing_face_seq = seq_id
     def get_video_frame(self):
         return self.video_frame
     def get_face_detected_frame(self):        

@@ -24,8 +24,9 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        global faces 
+        global faces, faces_recognized
         faces = deque(maxlen=1)
+        faces_recognized = deque(maxlen=1)
         self.setWindowTitle("Face from Camera") 
         layout = QVBoxLayout() 
         #Toolbar
@@ -41,15 +42,16 @@ class MainWindow(QMainWindow):
             settings.set("GLOBAL", "FIRST_RUN", "1")
             settings.update()
             self.onSettingClick()
+            
         # show select class dialog
         dialog = SelectClass(self)
         dialog.exec()
         
         # Create camera widgets
         logger.debug('Creating Camera Widgets...')
-        
-        self.camera = CameraWidget(520,600, faces, aspect_ratio=True)
-        self.recognize = FaceRecognize(faces)
+
+        self.camera = CameraWidget(520,600, faces, faces_recognized, aspect_ratio=True)
+        self.recognize = FaceRecognize(faces, faces_recognized)
         
         # Add widgets to layout
         logger.debug('Adding Camera and Faces recognize widget to layout...')
