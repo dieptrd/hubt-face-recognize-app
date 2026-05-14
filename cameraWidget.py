@@ -52,8 +52,6 @@ class CameraWidget(QtWidgets.QWidget):
         self.load_video_thread = Thread(target=self.load_network_stream, args=())
         self.load_video_thread.daemon = True
         self.load_video_thread.start()
-        
-        self.update_recognize()
 
         # Start background frame grabbing
         self.get_frame_thread = Thread(target=self.get_frame, args=())
@@ -63,7 +61,8 @@ class CameraWidget(QtWidgets.QWidget):
         #start background face detect
         self.detect_face_thread = Thread(target=self.detect_face, args=())
         self.detect_face_thread.daemon = True
-        self.detect_face_thread.start()
+        
+        self.update_recognize()
 
         # Periodically set video frame to display
         self.timer = QtCore.QTimer()
@@ -139,11 +138,17 @@ class CameraWidget(QtWidgets.QWidget):
                 pass
     
     def update_recognize(self):
+        if self.detect_face_thread:
+            while(self.detect_face_thread.is_alive()):
+                self.detect_face_thread_wait_stop = True
+                commons.spin(0.5)
+                
         self.detector_backend = settings.get("PROCESSING", "DETECTED_METHOD", fallback="retinaface")
-        self.model_name = settings.get("PROCESSING", "RECOGNIZE_METHOD", fallback="VGG-Face")
         self.wait_recognize = settings.get("PROCESSING", "WAIT_RECOGNIZED", fallback="True") == "True"
-        print(f'detector: {self.detector_backend}, model: {self.model_name}, slow: {self.wait_recognize}')
-        DeepFace.build_model(model_name=self.model_name)
+        print(f'detector: {self.detector_backend}, slow: {self.wait_recognize}')
+        
+        self.detect_face_thread_wait_stop = False
+        self.detect_face_thread.start()
 
     def get_largest_face(self, faces):
         if not faces: return None
@@ -177,6 +182,8 @@ class CameraWidget(QtWidgets.QWidget):
         # otherwise, they will be built after cam started and this will cause delays 
         num_frames_with_faces = 0
         while True:            
+            if self.detect_face_thread_wait_stop:
+                break
             if self.wait_recognize and len(self.faces) >0: 
                 commons.spin(1)
                 continue
@@ -239,7 +246,7 @@ class CameraWidget(QtWidgets.QWidget):
 
     showing_face_seq = ""
     
-    def _safe_get(self, obj, *keys):
+    def _safe_get(self, obj, *keys, default=None):
         try:
             cur = obj
             for key in keys:
@@ -248,11 +255,11 @@ class CameraWidget(QtWidgets.QWidget):
                 elif hasattr(cur, key):
                     cur = getattr(cur, key)
                 else:
-                    return None
+                    return default
             return cur
         except Exception as e:
             print("Error in _safe_get: ", e)
-            return None
+            return default
 
     def get_face_note_text(self,face):
         face_recognized_item = self.face_recognized[-1] if len(self.face_recognized) > 0 else None
@@ -344,8 +351,10 @@ class CameraWidget(QtWidgets.QWidget):
 
         if face is not None and seq_id != self.showing_face_seq:
             self.showing_face_seq = seq_id
+    
     def get_video_frame(self):
         return self.video_frame
+    
     def get_face_detected_frame(self):        
         if self.detected_frame is None:
             self.detected_frame = QtWidgets.QLabel()
