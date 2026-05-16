@@ -116,14 +116,19 @@ class LoadingDialog(QtWidgets.QDialog):
                 worker.value.connect(self.setValue)
         except Exception:
             pass
+        self.worker = worker  # keep reference to prevent GC
 
     # small helper to run the dialog in a blocking fashion while a QThread worker runs
-    def exec_with_thread(self, thread: QtCore.QThread, timeout: int = 0):
+    def exec_with_thread(self, timeout: int = 0):
         """Start a QThread (if not started), show the dialog modally and block until
         the thread finishes or an optional timeout (ms) elapses. Returns True if the
         thread finished, False otherwise.
         """
         finished = False
+        # create a non-parented thread so it's not destroyed when the dialog/widget
+        # is closed; keep a reference to avoid GC
+        thread = QtCore.QThread()
+        self._thread = thread
 
         def on_thread_finished():
             nonlocal finished
@@ -135,8 +140,25 @@ class LoadingDialog(QtWidgets.QDialog):
                 pass
 
         thread.finished.connect(on_thread_finished)
-        if not thread.isRunning():
-            thread.start()
+
+        # move worker to the thread and start its `run` when thread starts
+        self.worker.moveToThread(thread)
+        if hasattr(self.worker, 'run'):
+            try:
+                thread.started.connect(self.worker.run)
+            except Exception:
+                pass
+
+        # if worker emits finished, stop and cleanup the thread
+        if hasattr(self.worker, 'finished'):
+            try:
+                self.worker.finished.connect(thread.quit)
+                self.worker.finished.connect(self.worker.deleteLater)
+            except Exception:
+                pass
+
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
 
         # run modal loop until thread finishes or timeout
         if timeout and timeout > 0:

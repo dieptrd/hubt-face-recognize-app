@@ -79,7 +79,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.init_regcognize_video_frame())  
         logger.debug('Verifying camera credentials...')  
 
-        layout.addWidget(self.recognize.get_view())
+        layout.addWidget(self.recognize.get_new_faces_view())
         
         #add logging textbox
         self.text_log = QtWidgets.QTextEdit(self)

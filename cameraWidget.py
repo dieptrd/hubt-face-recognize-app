@@ -61,7 +61,7 @@ class CameraWidget(QtWidgets.QWidget):
 
         #start background face detecting
         self.detect_face_thread = None
-        self.update_recognize()
+        # self.update_recognize()
 
         # Periodically set video frame to display
         self.timer = QtCore.QTimer()

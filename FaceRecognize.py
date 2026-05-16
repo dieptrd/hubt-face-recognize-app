@@ -38,7 +38,7 @@ class FaceRecognize(QtWidgets.QWidget):
         self.model_name = settings.get("PROCESSING", "recognize_method", fallback="VGG-Face")
 
         self.recognize_thread = None
-        self.reload_recognize_thread()
+        # self.reload_recognize_thread()
 
         self.text_log = deque(maxlen=5)
         self.recognize_frame_queue = deque(maxlen=3)
@@ -77,7 +77,7 @@ class FaceRecognize(QtWidgets.QWidget):
                 self.recognize_frame.set_camera_face(pix_face)
                 self.recognize_frame.set_info(msv=msv, name=name)
 
-    def get_view(self):
+    def get_new_faces_view(self):
         if self.view_widget is None:
             self.view_widget = QtWidgets.QTextEdit(self)
             self.view_widget.setReadOnly(True)
@@ -100,7 +100,7 @@ class FaceRecognize(QtWidgets.QWidget):
         #reload setting
         self.collection_name = settings.get("VECTORDB", "COLLECTION_NAME", fallback="hubt_faces")
         self.vector_size = settings.getint("VECTORDB", "VECTOR_SIZE", fallback= 4096)
-        self.model_name = settings.get("PROCESSING", "recognize_method", fallback="VGG-Face")
+        self.model_name = settings.get("PROCESSING", "RECOGNIZE_METHOD", fallback="VGG-Face")
         
         #load all faces from db to local client
         self.recognize_thread = Thread(target=self.recognize, args=())
