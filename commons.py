@@ -7,7 +7,7 @@ def spin(seconds):
     while time.time() < time_end:
         QApplication.processEvents()
         
-def _safe_get(self, obj, *keys, default=None):
+def _safe_get(obj, *keys, default=None):
     try:
         cur = obj
         for key in keys:

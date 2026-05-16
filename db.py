@@ -104,7 +104,9 @@ class DbProvider:
                     ),
                 ]
             )
-            
+        if db is None or client is None:
+            return 0
+        
         while offset != None:
             points, offset = db.scroll(
                 collection_name=self.collection_name,
@@ -124,4 +126,74 @@ class DbProvider:
             print("Upserted points, new offset:", offset, "total points upserted:", len(points))
             
         return total
+    
+    def update_face_client(self, face_id, payload):
+        client = self.get_client()
+        if client is None:
+            return False
+        try:
+            existing_point = client.get(
+                collection_name=self.collection_name,
+                id=face_id,
+                with_payload=True,
+                with_vector=False,
+            )
+            if existing_point is not None:
+                updated_point = PointStruct(
+                    id=face_id,
+                    payload=payload,
+                    vector=existing_point.vector
+                )
+                client.upsert(
+                    collection_name=self.collection_name,
+                    wait=True,
+                    points=[updated_point]
+                )
+                print("Updated face {} in local DB".format(face_id))
+                return True
+            else:
+                print("Face ID {} not found in local DB".format(face_id))
+                return False
+        except Exception as e:
+            print("Error updating face in local DB: ", e)
+            return False
+        
+    def upsert_face_db(self, points):
+        db = self.get_db()
+        if db is None:
+            return False
+        try: 
+            db.upsert(
+                collection_name=self.collection_name,
+                wait=True,
+                points=points
+            )
+            print("Upserted faces to remote DB")
+            return True
+        except Exception as e:
+            print("Error upserting face to remote DB: ", e)
+            return False
+        
+    def upsert_face_client(self, id, vector, payload):
+        client = self.get_client()
+        if client is None:
+            return False
+        try: 
+            client.upsert(
+                collection_name=self.collection_name,
+                wait=True,
+                points=[
+                    PointStruct(
+                        id=id,
+                        vector=vector,
+                        payload=payload
+                    )
+                ]
+            )
+            print("Upserted face to local DB")
+            return True
+        except Exception as e:
+            print("Error upserting face to local DB: ", e)
+            return False
+        
 db = DbProvider()

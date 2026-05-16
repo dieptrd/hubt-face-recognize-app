@@ -13,9 +13,36 @@ from selectClass import SelectClass
 from cameraWidget import CameraWidget
 from FaceRecognize import FaceRecognize
 from logger import logger
+import logging
 from db import db
 
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = "0"  
+
+class QTextEditLogger(QtCore.QObject, logging.Handler):
+    text_signal = QtCore.pyqtSignal(str)
+    def __init__(self, text_edit):
+        QtCore.QObject.__init__(self)
+        logging.Handler.__init__(self)
+        self.text_edit = text_edit
+        self.text_signal.connect(self.append_text)
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+        except Exception:
+            msg = str(record)
+        self.text_signal.emit(msg)
+
+    def append_text(self, msg):
+        self.text_edit.append(msg)
+        sb = self.text_edit.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+
+class LevelFilter(logging.Filter):
+    """Allow only WARNING and ERROR level records."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno in (logging.WARNING, logging.ERROR)
 
 class MainWindow(QMainWindow):
     """
@@ -62,10 +89,26 @@ class MainWindow(QMainWindow):
         
         # Add widgets to layout
         logger.debug('Adding Camera and Faces recognize widget to layout...')
-        layout.addWidget(self.init_regcognize_video_frame())  
-        logger.debug('Verifying camera credentials...')  
+        layout.addWidget(self.init_regcognize_video_frame())
 
         layout.addWidget(self.recognize.get_view())
+        #add logging textbox
+        self.text_log = QtWidgets.QTextEdit(self)
+        self.text_log.setReadOnly(True)
+        layout.addWidget(self.text_log) 
+
+        qt_handler = QTextEditLogger(self.text_log)
+        qt_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+        # Only show INFO and ERROR levels in the UI text box
+        qt_handler.addFilter(LevelFilter())
+        logger.addHandler(qt_handler)
+        # Keep a reference to the handler so we can remove it on close
+        self._qt_handler = qt_handler
+        # Ensure logger will emit INFO records
+        logger.setLevel(logging.INFO)
+
+        logger.info("Logging to text_log initialized.")
+        
         w = QWidget()
         w.setLayout(layout)
         self.setCentralWidget(w)
@@ -101,7 +144,7 @@ class MainWindow(QMainWindow):
         _widget = QWidget(self)
         _widget.setLayout(QVBoxLayout()) 
         # _widget.layout().addWidget(self.camera.get_face_detected_frame())
-        _widget.layout().addWidget(self.recognize.get_recognize_frame())        
+        _widget.layout().addWidget(self.recognize.get_recognize_frame(show_info=True))        
         return _widget
 
     def loading_thread(self):

@@ -4,8 +4,10 @@ import cv2
 import numpy as np
 
 class FaceCompareWidget(QtWidgets.QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, show_info=False):
+        # keep constructor compatible with calls that pass parent as first positional
         super().__init__(parent)
+        self.show_info = show_info
         self.init_ui()
 
     def init_ui(self):
@@ -27,12 +29,13 @@ class FaceCompareWidget(QtWidgets.QWidget):
         main_layout.addLayout(images_layout)
 
         # Thông tin sinh viên nằm dưới
-        info_layout = QtWidgets.QVBoxLayout()
-        self.msv_label = QtWidgets.QLabel("MSV: ")
-        self.name_label = QtWidgets.QLabel("Tên: ")
-        info_layout.addWidget(self.msv_label)
-        info_layout.addWidget(self.name_label)
-        main_layout.addLayout(info_layout)
+        if self.show_info:
+            info_layout = QtWidgets.QVBoxLayout()
+            self.msv_label = QtWidgets.QLabel("MSV: ")
+            self.name_label = QtWidgets.QLabel("Tên: ")
+            info_layout.addWidget(self.msv_label)
+            info_layout.addWidget(self.name_label)
+            main_layout.addLayout(info_layout)
 
     def set_camera_face(self, pix):
         try:
@@ -85,5 +88,6 @@ class FaceCompareWidget(QtWidgets.QWidget):
     #     self.db_face_label.setPixmap(pix.scaled(200, 200, QtCore.Qt.KeepAspectRatio))
 
     def set_info(self, msv, name):
-        self.msv_label.setText(f"MSV: {msv}")
-        self.name_label.setText(f"Tên: {name}")
+        if self.show_info:
+            self.msv_label.setText(f"MSV: {msv}")
+            self.name_label.setText(f"Tên: {name}")

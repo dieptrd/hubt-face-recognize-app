@@ -37,18 +37,14 @@ class FaceRecognize(QtWidgets.QWidget):
         self.vector_size = settings.getint("VECTORDB", "VECTOR_SIZE", fallback= 4096) 
         self.model_name = settings.get("PROCESSING", "recognize_method", fallback="VGG-Face")
 
-        self.recognize_thread = Thread(target=self.recognize, args=())
-        self.recognize_thread.daemon = True
-        self.recognize_thread_wait_stop = False
-        self.recognize_thread.start()
-        # self.reload_recognize_thread()
+        self.recognize_thread = None
+        self.reload_recognize_thread()
 
-        self.text_log = deque(maxlen=10)
+        self.text_log = deque(maxlen=5)
         self.recognize_frame_queue = deque(maxlen=3)
         self.recognize_frame = None
 
-        self.view_widget = QtWidgets.QTextEdit()
-        self.view_widget.setReadOnly(True)
+        self.view_widget = None
 
         # Periodically set video frame to display
         #main thread add item recognize to view
@@ -59,15 +55,16 @@ class FaceRecognize(QtWidgets.QWidget):
 
     def ui_update(self):
         while self.text_log:
-            text = self.text_log.popleft()
-            if isinstance(text, str):
-                self.view_widget.append(text)
-            else:
-                #add image to log
-                (image, text) = text
-                self.view_widget.insertHtml("<img src='{}'> {}".format(self.convert_image_base64(image), text)) 
-    
-            self.view_widget.verticalScrollBar().setValue(self.view_widget.verticalScrollBar().maximum())
+            if self.view_widget is not None:
+                text = self.text_log.pop()
+                if isinstance(text, str):
+                    self.view_widget.append(text)
+                else:
+                    #add image to log
+                    (image, text) = text
+                    self.view_widget.insertHtml("<img src='{}'> {}".format(self.convert_image_base64(image), text)) 
+        
+                self.view_widget.verticalScrollBar().setValue(self.view_widget.verticalScrollBar().maximum())
             
         while self.recognize_frame_queue:
             (face_on_cam, registed_item) = self.recognize_frame_queue.pop()
@@ -75,17 +72,20 @@ class FaceRecognize(QtWidgets.QWidget):
                 img = imutils.resize(face_on_cam, width=200)
                 pix_face = self.convert_cv_qt(img, "Face Recognized" if registed_item is not None else "New face")
                 msv = commons._safe_get(registed_item, "payload", "msv", default="") if registed_item is not None else ""
-                name = commons._safe_get(registed_item, "payload", "name", default="") if registed_item is not None else ""
+                name = commons._safe_get(registed_item, "payload", "fullname", default="") if registed_item is not None else ""
                 
                 self.recognize_frame.set_camera_face(pix_face)
                 self.recognize_frame.set_info(msv=msv, name=name)
 
     def get_view(self):
+        if self.view_widget is None:
+            self.view_widget = QtWidgets.QTextEdit(self)
+            self.view_widget.setReadOnly(True)
         return self.view_widget
     
-    def get_recognize_frame(self):
+    def get_recognize_frame(self, show_info=False):
         if self.recognize_frame is None:
-            self.recognize_frame = FaceCompareWidget(self)
+            self.recognize_frame = FaceCompareWidget(self, show_info=show_info)
         return self.recognize_frame
 
     def reload_recognize_thread(self):
@@ -103,7 +103,10 @@ class FaceRecognize(QtWidgets.QWidget):
         self.model_name = settings.get("PROCESSING", "recognize_method", fallback="VGG-Face")
         
         #load all faces from db to local client
-        self.recognize_thread.start() 
+        self.recognize_thread = Thread(target=self.recognize, args=())
+        self.recognize_thread.daemon = True
+        self.recognize_thread_wait_stop = False
+        self.recognize_thread.start()
 
     def recognize(self):        
         while True:
@@ -134,7 +137,7 @@ class FaceRecognize(QtWidgets.QWidget):
                         detector_backend= "skip"
                     ) 
                     toc = time.time() - tic
-                    logger.info("Face recognition time: %s, face_confidence: %s", toc, represent[0].get("face_confidence") if represent is not None and len(represent) > 0 else 0)
+                    # logger.info("Face recognition time: %s, face_confidence: %s", toc, represent[0].get("face_confidence") if represent is not None and len(represent) > 0 else 0)
                     print("Face recognition time: ", toc, " face_confidence: ", represent[0].get("face_confidence") if represent is not None and len(represent) > 0 else 0)
                     item_in_db = None
                     #check unique face in local db
@@ -148,25 +151,17 @@ class FaceRecognize(QtWidgets.QWidget):
                             if self.face_recognized is not None:
                                 self.face_recognized.append(recognized_item)
                         else:
-                            # self.text_log.append("Face detected not found in local db.") 
-                            
                             id = face.get("id", str(uuid.uuid4()))
+                            # self.text_log.append("Face detected not found in local db.") 
                             self.text_log.append((face_mark, "add new face to db: " + id))
-                            point = PointStruct(
-                                id= id,
-                                vector= represent[0].get("embedding"),
-                                payload= {
-                                    "face_area": face_area,
-                                    "face": self.convert_image_base64(face_mark),
-                                    "frame": self.convert_image_base64(frame),
-                                    
-                                }
-                            )
-                            self.add_face_to_db(point)
+                            payload= {
+                                "face_area": face_area,
+                                "face": self.convert_image_base64(face_mark),
+                                "frame": self.convert_image_base64(frame),
+                            }
                             
                             if self.face_new is not None: 
-                                self.face_new.append(point)
-
+                                self.face_new.append((id,represent[0].get("embedding"), payload))
                             self.recognize_frame_queue.append((face_mark, None))
             except Exception as error:
                 print("recognize error: ", error) 

@@ -23,7 +23,7 @@ class CameraWidget(QtWidgets.QWidget):
     @param detector_backend (string): set face detector backend to opencv, retinaface, mtcnn, ssd, dlib, mediapipe or yolov8.
     """
 
-    def __init__(self, width, height, faces, face_recognized, aspect_ratio=False, parent=None, deque_size=1, face_confidence_threshold=0.7):
+    def __init__(self, width, height, faces, face_recognized, aspect_ratio=False, parent=None, fps=16, face_tracking=None, deque_size=1, face_confidence_threshold=0.7):
         super(CameraWidget, self).__init__(parent)
         
         # Initialize deque used to store frames read from the stream
@@ -32,6 +32,8 @@ class CameraWidget(QtWidgets.QWidget):
         self.face_recognized = face_recognized
         self.last_face = deque(maxlen=1)
         self.face_confidence = face_confidence_threshold
+        self.fps = fps
+        self.face_tracking = face_tracking
         # Slight offset is needed since PyQt layouts have a built in padding
         # So add offset to counter the padding 
         self.offset = 16
@@ -51,17 +53,14 @@ class CameraWidget(QtWidgets.QWidget):
         self.load_video_thread_count = 0
         self.load_video_thread = Thread(target=self.load_network_stream, args=())
         self.load_video_thread.daemon = True
-        self.load_video_thread.start()
 
         # Start background frame grabbing
         self.get_frame_thread = Thread(target=self.get_frame, args=())
         self.get_frame_thread.daemon = True
         self.get_frame_thread.start()
 
-        #start background face detect
-        self.detect_face_thread = Thread(target=self.detect_face, args=())
-        self.detect_face_thread.daemon = True
-        
+        #start background face detecting
+        self.detect_face_thread = None
         self.update_recognize()
 
         # Periodically set video frame to display
@@ -115,7 +114,8 @@ class CameraWidget(QtWidgets.QWidget):
 
     def get_frame(self):
         """Reads frame, resizes, and converts image to pixmap"""
-
+        frame_time = 1 / self.fps
+        t = time.time()
         while True:
             try:
                 if self.capture and self.online:
@@ -126,9 +126,12 @@ class CameraWidget(QtWidgets.QWidget):
                             self.deque.append(frame)
                     else:
                         self.capture.release()
-                        self.online = False
+                        self.online = False 
+                    dur = frame_time - (time.time() - t)
+                    if dur > 0:
+                        commons.spin(dur)
                 else:
-                    commons.spin(2)
+                    commons.spin(1)
             except Exception as e:
                 print("E:get_frame - ", e)
                 if self.capture:
@@ -138,6 +141,13 @@ class CameraWidget(QtWidgets.QWidget):
                 pass
     
     def update_recognize(self):
+        
+        if not self.load_video_thread.is_alive():
+            self.load_video_thread.start()
+
+        if not self.get_frame_thread.is_alive():
+            self.get_frame_thread.start()
+
         if self.detect_face_thread:
             while(self.detect_face_thread.is_alive()):
                 self.detect_face_thread_wait_stop = True
@@ -145,8 +155,19 @@ class CameraWidget(QtWidgets.QWidget):
                 
         self.detector_backend = settings.get("PROCESSING", "DETECTED_METHOD", fallback="retinaface")
         self.wait_recognize = settings.get("PROCESSING", "WAIT_RECOGNIZED", fallback="True") == "True"
-        print(f'detector: {self.detector_backend}, slow: {self.wait_recognize}')
         
+        try:
+            self.detected_face_stable = int(settings.get("PROCESSING", "DETECTED_FACE_STABLE", fallback="2"))
+        except Exception as e:
+            logger.warning("Invalid DETECTED_FACE_STABLE, using default 2: %s", e)
+            self.detected_face_stable = 2
+
+        self.detected_face_tracking = settings.get("PROCESSING", "DETECTED_FACE_TRACKING", fallback="False") == "True" if self.face_tracking is None else self.face_tracking
+
+        print(f'detector: {self.detector_backend}, slow: {self.wait_recognize}, stable: {self.detected_face_stable}')
+
+        self.detect_face_thread = Thread(target=self.detect_face, args=())
+        self.detect_face_thread.daemon = True
         self.detect_face_thread_wait_stop = False
         self.detect_face_thread.start()
 
@@ -191,16 +212,16 @@ class CameraWidget(QtWidgets.QWidget):
                 commons.spin(2)
                 continue
             try:
-                frame = (self.deque[-1]).copy()
                 t = time.time()
+                frame = (self.deque[-1]).copy()
                 face_objs = DeepFace.extract_faces(
                     img_path=frame.copy(),
                     detector_backend=self.detector_backend,
                     enforce_detection=False,
-                    color_face="bgr",
+                    # color_face="bgr",
                     align=True
                 ) 
-                t = time.time() - t
+                dur = time.time() - t
                 # print("Face detection time: ", t)
                 face_bigger = self.get_largest_face(face_objs) 
                 
@@ -209,7 +230,7 @@ class CameraWidget(QtWidgets.QWidget):
                     item['face_crop'] = frame[item['facial_area']['y']: item['facial_area']['y'] + item['facial_area']['h'], item['facial_area']['x']: item['facial_area']['x'] + item['facial_area']['w']] 
                     item['frame'] = frame.copy()
                     item["tic"] = time.time()
-                    item["detect_time"] = t
+                    item["detect_time"] = dur
 
                     face_last = self.last_face[-1] if len(self.last_face) > 0 else None
                     item["iou"] = self.calculate_face_iou(item['facial_area'], face_last['facial_area']) if face_last is not None else 0
@@ -217,32 +238,38 @@ class CameraWidget(QtWidgets.QWidget):
                     if((num_frames_with_faces > 0 and item["iou"] < 0.5) or num_frames_with_faces <1):
                         # if the detected face is very different from the last detected face, reset the counter, this can help reduce false positives when using retinaface detector
                         num_frames_with_faces = 1
-                        logger.warning("Face detected with low iou area %s, reset num_frames_with_faces counter", item.get("iou", 0))
+                        # logger.warning("Face detected with low iou area %s, reset num_frames_with_faces counter", item.get("iou", 0))
                         item["seq_id"] = str(uuid.uuid4())
                     else:
                         num_frames_with_faces = num_frames_with_faces + 1
                         item["seq_id"] = face_last.get("seq_id", str(uuid.uuid4())) if face_last is not None else str(uuid.uuid4())
-                    
-                    item["num_frames_with_faces"] = num_frames_with_faces 
-                    logger.info("Detect face %s: tic: %s, iou: %s", num_frames_with_faces, item['tic'], item.get("iou", None))
+
+                    item["num_frames_with_faces"] = num_frames_with_faces
+                    # logger.info("Detect face seq %s: time: %s s", item["num_frames_with_faces"], item['detect_time'])
                     self.last_face.append(item)
                     # only append face if it has been detected in consecutive frames or has high confidence, this can help reduce false positives when using retinaface detector
-                    if num_frames_with_faces % 5 == 0 and item.get("iou", 0) >= 0.7:
-                        self.faces.append(item.copy())
+                    if num_frames_with_faces % self.detected_face_stable == 0 and item.get("iou", 0) >= 0.7:
+                        if self.detected_face_tracking:
+                            # track face in the stream, return the latest position of the face
+                            face_recognized = self.face_recognized[-1] if len(self.face_recognized) > 0 else None
+                            face_recognized_seq_id = face_recognized.get("seq_id", "") if face_recognized is not None else ""
+                            if face_recognized is None or (face_recognized is not None and face_recognized_seq_id != item["seq_id"]):
+                                self.faces.append(item.copy())
+                        else:
+                            self.faces.append(item.copy())
                 else:
                     print("Face detection failed: %s", time.time())
                     num_frames_with_faces = 0
                     self.last_face.append(None)
+                dur = time.time() - t
+                if dur > 1:
+                    logger.warning("Face detection time is too long: %s s", dur)
 
             except Exception as e:
                 print("Detect face e: ", e)
-                
+                logger.error("Error in detect_face: %s", str(e))
                 commons.spin(1)
-                pass
-
-    def face_tracking(self):
-        """track face in the stream, return the latest position of the face"""
-        last_face = self.last_face[-1] if len(self.last_face) > 0 else None
+                pass 
 
     showing_face_seq = ""
     
