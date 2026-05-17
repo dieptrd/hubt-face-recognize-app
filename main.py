@@ -11,7 +11,7 @@ from appSettings import settings
 from settingDialog import SettingDialog
 from selectClass import SelectClass
 from cameraWidget import CameraWidget
-from FaceRecognize import FaceRecognize
+from faceRecognize import FaceRecognize
 from logger import logger
 import logging
 from db import db
@@ -75,23 +75,23 @@ class MainWindow(QMainWindow):
             self.onSettingClick()
             
         # show select class dialog
-        dialog = SelectClass(self)
-        dialog.exec()
-        
-        #show progress dialog
-        self.loading_thread()
+        # dialog = SelectClass(self)
+        # dialog.exec()
 
         # Create camera widgets
         logger.debug('Creating Camera Widgets...')
 
         self.camera = CameraWidget(520,600, faces, faces_recognized, aspect_ratio=True)
-        self.recognize = FaceRecognize(faces, faces_recognized)
+        self.recognize = FaceRecognize(faces, faces_recognized) 
+        
+        #show progress dialog
+        self.loading_thread()
         
         # Add widgets to layout
         logger.debug('Adding Camera and Faces recognize widget to layout...')
         layout.addWidget(self.init_regcognize_video_frame())
 
-        layout.addWidget(self.recognize.get_view())
+        # layout.addWidget(self.recognize.get_new_faces_view())
         #add logging textbox
         self.text_log = QtWidgets.QTextEdit(self)
         self.text_log.setReadOnly(True)

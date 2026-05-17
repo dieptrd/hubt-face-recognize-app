@@ -270,6 +270,8 @@ class CameraWidget(QtWidgets.QWidget):
                 logger.error("Error in detect_face: %s", str(e))
                 commons.spin(1)
                 pass 
+            finally:
+                t = time.time()
 
     showing_face_seq = ""
     

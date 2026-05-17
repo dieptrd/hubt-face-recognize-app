@@ -54,28 +54,26 @@ class FaceRecognize(QtWidgets.QWidget):
         self.timer.start(2)
 
     def ui_update(self):
-        while self.text_log:
-            if self.view_widget is not None:
-                text = self.text_log.pop()
-                if isinstance(text, str):
-                    self.view_widget.append(text)
-                else:
-                    #add image to log
-                    (image, text) = text
-                    self.view_widget.insertHtml("<img src='{}'> {}".format(self.convert_image_base64(image), text)) 
-        
-                self.view_widget.verticalScrollBar().setValue(self.view_widget.verticalScrollBar().maximum())
+        while self.text_log and self.view_widget is not None: 
+            text = self.text_log.pop()
+            if isinstance(text, str):
+                self.view_widget.append(text)
+            else:
+                #add image to log
+                (image, text) = text
+                self.view_widget.insertHtml("<img src='{}'> {}".format(self.convert_image_base64(image), text)) 
+    
+            self.view_widget.verticalScrollBar().setValue(self.view_widget.verticalScrollBar().maximum())
             
-        while self.recognize_frame_queue:
+        while self.recognize_frame_queue and self.recognize_frame is not None:
             (face_on_cam, registed_item) = self.recognize_frame_queue.pop()
-            if self.recognize_frame is not None:
-                img = imutils.resize(face_on_cam, width=200)
-                pix_face = self.convert_cv_qt(img, "Face Recognized" if registed_item is not None else "New face")
-                msv = commons._safe_get(registed_item, "payload", "msv", default="") if registed_item is not None else ""
-                name = commons._safe_get(registed_item, "payload", "fullname", default="") if registed_item is not None else ""
-                
-                self.recognize_frame.set_camera_face(pix_face)
-                self.recognize_frame.set_info(msv=msv, name=name)
+            img = imutils.resize(face_on_cam, width=200)
+            pix_face = self.convert_cv_qt(img, "Face Recognized" if registed_item is not None else "New face")
+            msv = commons._safe_get(registed_item, "payload", "msv", default="") if registed_item is not None else ""
+            name = commons._safe_get(registed_item, "payload", "fullname", default="") if registed_item is not None else ""
+            
+            self.recognize_frame.set_camera_face(pix_face)
+            self.recognize_frame.set_info(msv=msv, name=name)
 
     def get_new_faces_view(self):
         if self.view_widget is None:
@@ -165,14 +163,9 @@ class FaceRecognize(QtWidgets.QWidget):
                             self.recognize_frame_queue.append((face_mark, None))
             except Exception as error:
                 print("recognize error: ", error) 
-                # self.spin(2)
+                commons.spin(1)
                 pass
-    
-    def spin(self, seconds):
-        """Pause for set amount of seconds, replaces time.sleep so program doesnt stall"""
-        time_end = time.time() + seconds
-        while time.time() < time_end:
-            QtWidgets.QApplication.processEvents()
+     
     
     def _rever_image(self, img):
         if(img.max() < 1):

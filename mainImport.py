@@ -16,7 +16,7 @@ from settingDialog import SettingDialog
 from selectClass import SelectClass
 from addNewStudent import AddNewStudent
 from cameraWidget import CameraWidget
-from FaceRecognize import FaceRecognize
+from faceRecognize import FaceRecognize
 from logger import logger
 from db import db
 import commons
@@ -253,7 +253,7 @@ class MainWindow(QMainWindow):
                 (id, vector, payload) = faces_new.pop()
                 db.upsert_face_client(id, vector, payload)
             else:
-                QtCore.QThread.msleep(100)  # Sleep briefly to avoid busy waiting
+                commons.spin(0.2)
 
 app = QApplication(sys.argv)
 window = MainWindow()
