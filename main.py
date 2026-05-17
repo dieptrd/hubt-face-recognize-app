@@ -12,11 +12,43 @@ from settingDialog import SettingDialog
 from selectClass import SelectClass
 from cameraWidget import CameraWidget
 from faceRecognize import FaceRecognize
+from loadingDialog import LoadingDialog
 from logger import logger
 import logging
 from db import db
 
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = "0"  
+
+class Worker(QtCore.QObject):
+    progress = QtCore.pyqtSignal(int, str)
+    finished = QtCore.pyqtSignal()
+
+    def __init__(self, camera, recognize, parent=None):
+        super().__init__(parent)
+        self.camera = camera
+        self.recognize = recognize
+
+    @QtCore.pyqtSlot()
+    def run(self):
+        # Try to warm up DeepFace models (non-fatal)
+        try:
+            model_name = settings.get("PROCESSING", "recognize_method", fallback="VGG-Face")
+            self.progress.emit(0, f"Loading {model_name} model...")
+            DeepFace.build_model(model_name=model_name)
+        except Exception:
+            pass
+
+        # Simulated work / progress update
+        self.progress.emit(50, "Loading database...")
+        self.db = db.reload_db(True)
+        self.db.load_all_faces_to_client_with_filter()
+        self.progress.emit(100, "Loading complete.")
+        # signal finished so the dialog/thread can quit
+        if hasattr(self, 'camera'):
+            self.camera.update_recognize()
+        if hasattr(self, 'recognize'):
+            self.recognize.reload_recognize_thread()
+        self.finished.emit()
 
 class QTextEditLogger(QtCore.QObject, logging.Handler):
     text_signal = QtCore.pyqtSignal(str)
@@ -155,32 +187,19 @@ class MainWindow(QMainWindow):
         It updates the progress dialog with a simulated loading process.
         """
         
-        self.progress_dialog = QtWidgets.QProgressDialog()
-        self.progress_dialog.setRange(0, 1000)
-        self.progress_dialog.setModal(True)
-        self.progress_dialog.setCancelButton(None)
-        self.progress_dialog.setAutoClose(True)
-        self.progress_dialog.setWindowModality(QtCore.Qt.WindowModal)
-        self.progress_dialog.show() 
+        dialog = LoadingDialog(self)
+        dialog.setModal(True) 
 
-        # Face model loading process
-        self.progress_dialog.setLabelText("Face Model Loading...")
-        self.progress_dialog.setValue(0)  # Update progress to 10%
-        self.model_name = settings.get("PROCESSING", "recognize_method", fallback="VGG-Face")
-        DeepFace.build_model(model_name=self.model_name)
+        # create worker and keep references to prevent GC
+        worker = Worker(self.camera, self.recognize)
+        self._loader_worker = worker
 
-        self.progress_dialog.setValue(300)  # Update progress to 30%
-        #Face data loading process
-        self.progress_dialog.setLabelText("Face Data Loading...")
-        self.db = db.reload_db(True)
-        self.db.load_all_faces_to_client_with_filter()
-        
-        if hasattr(self, 'camera'):
-            self.camera.update_recognize()
-        if hasattr(self, 'recognize'):
-            self.recognize.reload_recognize_thread()
+        # bind worker signals to the dialog so UI updates happen on the main thread
+        dialog.bind_signals(worker)
 
-        self.progress_dialog.close()
+        # exec_with_thread will create and start a QThread and move the worker there
+        finished = dialog.exec_with_thread(30000)
+        print('Loading dialog finished: %s', finished)
 
 app = QApplication(sys.argv)
 window = MainWindow()
