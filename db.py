@@ -1,4 +1,5 @@
 import os
+from logger import logger
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from qdrant_client.http.models import Distance, VectorParams, PointStruct
@@ -79,6 +80,19 @@ class DbProvider:
             print("Error connecting to DB: ", e)
             return None
 
+    def get_points_count_client(self):
+        client = self.get_client()
+        if client is None:
+            return 0
+        try:
+            count = client.count(
+                collection_name=self.collection_name
+            )
+            return count
+        except Exception as e:
+            logger.error("Error getting points count: %s", e)
+            return 0
+
     def close_db(self):
         if self.db is not None:
             self.db.close()
@@ -108,23 +122,28 @@ class DbProvider:
             return 0
         
         while offset != None:
-            points, offset = db.scroll(
-                collection_name=self.collection_name,
-                scroll_filter=scroll_filter,
-                offset=offset,
-                limit=100,
-                with_payload=True,
-                with_vectors=True,
-            )
-            
-            client.upsert(
-                collection_name=self.collection_name,
-                wait=True,
-                points=points
-            )
-            total += len(points)
-            print("Upserted points, new offset:", offset, "total points upserted:", len(points))
-            
+            try:
+                points, offset = db.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=scroll_filter,
+                    offset=offset,
+                    limit=100,
+                    with_payload=True,
+                    with_vectors=True,
+                )
+                
+                client.upsert(
+                    collection_name=self.collection_name,
+                    wait=True,
+                    points=points
+                )
+                total += len(points)
+            except Exception as e:
+                logger.error("Error loading faces to client: %s", e)
+                break
+            finally:
+                logger.info("Upserted points, new offset: %s, total points upserted: %s", offset, len(points))
+
         return total
     
     def update_face_client(self, face_id, payload):
