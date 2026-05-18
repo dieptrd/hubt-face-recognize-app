@@ -23,10 +23,12 @@ class Worker(QtCore.QObject):
     progress = QtCore.pyqtSignal(int, str)
     finished = QtCore.pyqtSignal()
 
-    def __init__(self, camera, recognize, parent=None):
+    def __init__(self, parent=None, camera=None, recognize=None):
         super().__init__(parent)
-        self.camera = camera
-        self.recognize = recognize
+        if camera is not None:
+            self.camera = camera
+        if recognize is not None:
+            self.recognize = recognize
 
     @QtCore.pyqtSlot()
     def run(self):
@@ -41,13 +43,15 @@ class Worker(QtCore.QObject):
         # Simulated work / progress update
         self.progress.emit(50, "Loading database...")
         self.db = db.reload_db(True)
-        self.db.load_all_faces_to_client_with_filter()
+        number_points = self.db.load_all_faces_to_client_with_filter()
         self.progress.emit(100, "Loading complete.")
         # signal finished so the dialog/thread can quit
         if hasattr(self, 'camera'):
             self.camera.update_recognize()
         if hasattr(self, 'recognize'):
             self.recognize.reload_recognize_thread()
+
+        logger.warning("Database reloaded, %d faces loaded.", number_points)
         self.finished.emit()
 
 class QTextEditLogger(QtCore.QObject, logging.Handler):
@@ -114,10 +118,7 @@ class MainWindow(QMainWindow):
         logger.debug('Creating Camera Widgets...')
 
         self.camera = CameraWidget(520,600, faces, faces_recognized, aspect_ratio=True)
-        self.recognize = FaceRecognize(faces, faces_recognized) 
-        
-        #show progress dialog
-        self.loading_thread()
+        self.recognize = FaceRecognize(faces, faces_recognized, face_show_type="recognized") 
         
         # Add widgets to layout
         logger.debug('Adding Camera and Faces recognize widget to layout...')
@@ -144,6 +145,16 @@ class MainWindow(QMainWindow):
         w = QWidget()
         w.setLayout(layout)
         self.setCentralWidget(w)
+        
+    def showEvent(self, event):
+        super().showEvent(event)
+        #show progress dialog
+        self.loading_thread()
+        # Start the camera thread when the window is shown
+        if hasattr(self, 'camera'):
+            self.camera.start_camera_thread()
+        if hasattr(self, 'recognize'):
+            self.recognize.start_recognize_thread()
     
     def onSettingClick(self):
         dlg = SettingDialog(self)
@@ -191,15 +202,27 @@ class MainWindow(QMainWindow):
         dialog.setModal(True) 
 
         # create worker and keep references to prevent GC
-        worker = Worker(self.camera, self.recognize)
+        worker = Worker()
         self._loader_worker = worker
 
         # bind worker signals to the dialog so UI updates happen on the main thread
         dialog.bind_signals(worker)
-
+        worker.finished.connect(self.reload_recognize_widget)
         # exec_with_thread will create and start a QThread and move the worker there
         finished = dialog.exec_with_thread(30000)
         print('Loading dialog finished: %s', finished)
+        
+    def reload_recognize_widget(self):
+        """
+        Reload the face recognition widget.
+
+        This method is intended to be called after the database has been reloaded to update the face recognition widget with the new data.
+        """
+        if hasattr(self, 'camera'):
+            self.camera.update_recognize()
+        if hasattr(self, 'recognize'):
+            self.recognize.reload_recognize_thread()
+        logger.warning("Face recognition widget reloaded.")
 
 app = QApplication(sys.argv)
 window = MainWindow()

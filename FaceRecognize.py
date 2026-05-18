@@ -27,12 +27,19 @@ from db import db
 import commons
 
 class FaceRecognize(QtWidgets.QWidget):
-    def __init__(self, faces, face_recognized, face_new=None, parent=None ) -> None:
+    def __init__(self, faces, face_recognized, face_new=None, face_show_type= "all", parent=None) -> None:
+        '''
+        faces: list of face detected from camera, each item is a dict with keys: id, frame, face_crop, facial_area
+        face_recognized: list to append recognized face, each item is a dict with keys: id, frame, face_crop, facial_area, recognized (item in db)
+        face_new: list to append new face, each item is a tuple of (id, represent, payload)
+        '''
         super(FaceRecognize, self).__init__(parent)     
         self.faces = faces
         self.face_recognized = face_recognized
         self.face_new = face_new
-        
+        # face_show_type: "all" (default) to show all, "recognized" to show only recognized faces, "new" to show only new faces
+        self.face_show_type = face_show_type
+
         self.collection_name = settings.get("VECTORDB", "COLLECTION_NAME", fallback="hubt_faces")
         self.vector_size = settings.getint("VECTORDB", "VECTOR_SIZE", fallback= 4096) 
         self.model_name = settings.get("PROCESSING", "recognize_method", fallback="VGG-Face")
@@ -67,13 +74,19 @@ class FaceRecognize(QtWidgets.QWidget):
             
         while self.recognize_frame_queue and self.recognize_frame is not None:
             (face_on_cam, registed_item) = self.recognize_frame_queue.pop()
-            img = imutils.resize(face_on_cam, width=200)
-            pix_face = self.convert_cv_qt(img, "Face Recognized" if registed_item is not None else "New face")
-            msv = commons._safe_get(registed_item, "payload", "msv", default="") if registed_item is not None else ""
-            name = commons._safe_get(registed_item, "payload", "fullname", default="") if registed_item is not None else ""
+            img = commons._safe_get(registed_item, "payload", "face", default=None) if registed_item is not None else None
+            if img is not None:
+                img = self._rever_image(cv2.imdecode(np.frombuffer(base64.b64decode(img.split(",")[1]), np.uint8), cv2.IMREAD_COLOR))
+            else :
+                img = face_on_cam
+            img = imutils.resize(img, width=200)
             
-            self.recognize_frame.set_camera_face(pix_face)
-            self.recognize_frame.set_info(msv=msv, name=name)
+            pix_face = self.convert_cv_qt(img, "Face Recognized" if registed_item is not None else "New face")
+            if self.face_show_type == "all" or (self.face_show_type == "recognized" and registed_item is not None) or (self.face_show_type == "new" and registed_item is None):
+                self.recognize_frame.set_camera_face(pix_face) 
+                msv = commons._safe_get(registed_item, "payload", "msv", default="") if registed_item is not None else ""
+                name = commons._safe_get(registed_item, "payload", "fullname", default="") if registed_item is not None else "" 
+                self.recognize_frame.set_info(msv=msv, name=name)
 
     def get_new_faces_view(self):
         if self.view_widget is None:
@@ -136,7 +149,7 @@ class FaceRecognize(QtWidgets.QWidget):
                     ) 
                     toc = time.time() - tic
                     # logger.info("Face recognition time: %s, face_confidence: %s", toc, represent[0].get("face_confidence") if represent is not None and len(represent) > 0 else 0)
-                    print("Face recognition time: ", toc, " face_confidence: ", represent[0].get("face_confidence") if represent is not None and len(represent) > 0 else 0)
+                    print("Face recognition time: ", toc)
                     item_in_db = None
                     #check unique face in local db
                     if(represent is not None and len(represent) > 0):
@@ -162,7 +175,7 @@ class FaceRecognize(QtWidgets.QWidget):
                                 self.face_new.append((id,represent[0].get("embedding"), payload))
                             self.recognize_frame_queue.append((face_mark, None))
             except Exception as error:
-                print("recognize error: ", error) 
+                logger.error("recognize error: %s", error)
                 commons.spin(1)
                 pass
      
@@ -201,7 +214,7 @@ class FaceRecognize(QtWidgets.QWidget):
             with_payload=True,
             limit= 5,
             search_params=models.SearchParams(hnsw_ef=128, exact=True),
-            score_threshold=0.8
+            score_threshold=0.7
         )
         
         data = self._normalize_qdrant_response(resp)   
@@ -231,13 +244,6 @@ class FaceRecognize(QtWidgets.QWidget):
             with_payload=True
         )
         return data[0] if len(data) > 0 else None
-    
-    def add_face_to_db(self, item):
-        db.get_client().upsert(
-            collection_name=self.collection_name,
-            wait=True,
-            points=[item]
-        )
 
     def _normalize_qdrant_response(self, resp):
         """

@@ -66,7 +66,7 @@ class CameraWidget(QtWidgets.QWidget):
         # Periodically set video frame to display
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.set_frame)
-        self.timer.start(2)
+        self.timer.start(10)
 
     def load_network_stream(self):
         """detect and reconnect network stream if connection is lost"""
@@ -151,7 +151,7 @@ class CameraWidget(QtWidgets.QWidget):
         if self.detect_face_thread:
             while(self.detect_face_thread.is_alive()):
                 self.detect_face_thread_wait_stop = True
-                commons.spin(0.5)
+                commons.spin(0.1)
                 
         self.detector_backend = settings.get("PROCESSING", "DETECTED_METHOD", fallback="retinaface")
         self.wait_recognize = settings.get("PROCESSING", "WAIT_RECOGNIZED", fallback="True") == "True"
@@ -209,7 +209,7 @@ class CameraWidget(QtWidgets.QWidget):
                 commons.spin(1)
                 continue
             if len(self.deque) < 1:
-                commons.spin(2)
+                commons.spin(1)
                 continue
             try:
                 t = time.time()
