@@ -211,8 +211,9 @@ class CameraWidget(QtWidgets.QWidget):
             if len(self.deque) < 1:
                 commons.spin(1)
                 continue
+            
+            t = time.time()
             try:
-                t = time.time()
                 frame = (self.deque[-1]).copy()
                 face_objs = DeepFace.extract_faces(
                     img_path=frame.copy(),
@@ -258,23 +259,24 @@ class CameraWidget(QtWidgets.QWidget):
                         else:
                             self.faces.append(item.copy())
                 else:
-                    print("Face detection failed: %s", time.time())
+                    # print("Face detection failed: %s", time.time())
                     num_frames_with_faces = 0
                     self.last_face.append(None)
-                dur = time.time() - t
-                if dur > 1:
-                    logger.warning("Face detection time is too long: %s s", dur)
 
             except Exception as e:
                 print("Detect face e: ", e)
                 logger.error("Error in detect_face: %s", str(e))
                 commons.spin(1)
                 pass 
+            
             finally:
-                t = time.time()
-
+                dur = time.time() - t
+                if dur > 1.5:
+                    logger.warning("Face detection time is too long: %s s", dur)
+                if dur < 0.5:
+                    commons.spin(0.5-dur)
+                    
     showing_face_seq = ""
-    
     def _safe_get(self, obj, *keys, default=None):
         try:
             cur = obj

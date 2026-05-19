@@ -178,11 +178,12 @@ class FaceRecognize(QtWidgets.QWidget):
                             if self.face_new is not None: 
                                 self.face_new.append((id,represent[0].get("embedding"), payload))
                             self.recognize_frame_queue.append((face_mark, None))
+                else:
+                    commons.spin(0.5)
             except Exception as error:
                 logger.error("recognize error: %s", error)
                 commons.spin(1)
                 pass
-     
     
     def _rever_image(self, img):
         if(img.max() < 1):

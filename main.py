@@ -146,15 +146,19 @@ class MainWindow(QMainWindow):
         w.setLayout(layout)
         self.setCentralWidget(w)
         
+    def closeEvent(self, event):
+        """
+        This method is automatically called when the window tries to close.
+        """
+        super().closeEvent(event)
+        # if hasattr(self, 'camera'):
+        #     self.camera.close()
+            
+        
     def showEvent(self, event):
         super().showEvent(event)
         #show progress dialog
         self.loading_thread()
-        # Start the camera thread when the window is shown
-        if hasattr(self, 'camera'):
-            self.camera.start_camera_thread()
-        if hasattr(self, 'recognize'):
-            self.recognize.start_recognize_thread()
     
     def onSettingClick(self):
         dlg = SettingDialog(self)

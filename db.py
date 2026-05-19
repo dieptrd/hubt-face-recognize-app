@@ -2,8 +2,126 @@ import os
 from logger import logger
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from qdrant_client.http.models import Distance, VectorParams, PointStruct
+from qdrant_client.http.models import VectorParams, Distance, MultiVectorConfig, PointStruct
+import uuid
+
 from appSettings import settings
+import commons
+
+class Faces:
+    def __init__(self, db):
+        self.db = db
+        self.collection_name = settings.get("VECTORDB", "COLLECTION_NAME", fallback="hubt_faces")
+    
+    def count(self):
+        try:
+            count = self.db.count(
+                collection_name=self.collection_name
+            )
+            return count
+        except Exception as e:
+            logger.error("Error getting points count: %s", e)
+            return 0
+    
+    def load_all_faces(self, payload_key, filter_list=None):
+        offset = 0
+        total = 0
+        faces = []
+        
+        scroll_filter = None
+        if filter_list is not None:
+            scroll_filter = models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="payload_key",
+                        match=models.MatchAny(any=filter_list),
+                    ),
+                ]
+            )
+        
+        while offset != None:
+            try:
+                points, offset = self.db.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=scroll_filter,
+                    offset=offset,
+                    limit=100,
+                    with_payload=True,
+                    with_vectors=True,
+                )
+                faces.extend(points)
+                total += len(points)
+            except Exception as e:
+                logger.error("Error loading faces: %s", e)
+                break
+            finally:
+                logger.info("Loaded faces, new offset: %s, total faces loaded: %s", offset, len(faces))
+
+        return (faces, total)
+
+    def close(self):
+        self.db.close()
+        return self
+        
+    def clear(self):
+        try:
+            self.db.delete_collection(collection_name=self.collection_name)
+            logger.info("Collection '{}' cleared".format(self.collection_name))
+        except Exception as e:
+            logger.error("Error clearing DB: %s", e)
+        return self
+
+    def upsert_faces(self, points):
+        try: 
+            self.db.upsert(
+                collection_name=self.collection_name,
+                wait=True,
+                points=points
+            )
+            logger.info("Upserted faces to DB")
+            return True
+        except Exception as e:
+            logger.error("Error upserting face to DB: %s", e)
+            return False
+
+    def get_face(self, point_id):
+        try:
+            points = self.db.retrieve(
+                collection_name=self.collection_name,
+                ids=[point_id],
+                with_vectors=True,
+                with_payload=True
+            )
+            if not points:
+                raise ValueError(f"Point with ID {point_id} does not exist.")
+            return points[0]
+        except Exception as e:
+            logger.error("Error inserting vector to DB: %s", e)
+        return None
+
+    def add_vector(self, id, vector):
+        try: 
+            point = self.get_face()
+            vectors = commons._safe_get(point, "vectors") if point is not None else []
+            payload = commons._safe_get(point, "payload") if point is not None else {}
+            vectors.extend(vector)
+            self.db.upsert(
+                collection_name=self.collection_name,
+                wait=True,
+                points=[
+                    PointStruct(
+                        id= id,
+                        vector= vectors,
+                        payload= payload
+                    )
+                ]
+            )
+            logger.info("Inserted vector for face {} to DB".format(id))
+            return True
+        except Exception as e:
+            logger.error("Error inserting vector to DB: %s", e)
+        return False
+
 
 class DbProvider:
     def __init__(self):
@@ -29,11 +147,22 @@ class DbProvider:
         if self.client is None:
             client_path = os.path.join("./vectordb","client") 
             self.client = QdrantClient(path=client_path)
-            if not os.path.isfile(client_path + "/{}/{}/storage.sqlite".format(key, self.collection_name)):
+            try:
+                self.client.get_collection(collection_name=self.collection_name)
+                print("Client collection '{}' exists".format(self.collection_name))
+            except Exception:
+                print("Client collection '{}' not found, creating...".format(self.collection_name))
                 self.client.create_collection(
                     collection_name= self.collection_name,
-                    vectors_config= VectorParams(size=self.vector_size, distance=Distance.COSINE),
+                    vectors_config= VectorParams(
+                        size=self.vector_size, 
+                        distance=Distance.COSINE,
+                        # multivector_config=models.MultiVectorConfig(
+                        #     comparator=models.MultiVectorComparator.MAX_SIM
+                        # )
+                    ),
                 )
+            return self.client
         return self.client
     
     def clear_client(self):
@@ -72,8 +201,14 @@ class DbProvider:
             except Exception:
                 print("Remote collection '{}' not found, creating...".format(self.collection_name))
                 self.db.create_collection(
-                    collection_name=self.collection_name,
-                    vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
+                    collection_name= self.collection_name,
+                    vectors_config= VectorParams(
+                        size=self.vector_size, 
+                        distance=Distance.COSINE,
+                        # multivector_config=models.MultiVectorConfig(
+                        #     comparator=models.MultiVectorComparator.MAX_SIM
+                        # )
+                    ),
                 )
             return self.db
         except Exception as e:
