@@ -61,14 +61,15 @@ class MainWindow(QMainWindow):
         self.new_student_button.setToolTip("Add a new student to the database") 
         self.new_student_button.clicked.connect(self._on_new_student)
         
-        #show progress dialog
-        self.loading_thread()
+        self.clear_current_faces_button = QtWidgets.QPushButton("Clear Current Faces", self)
+        self.clear_current_faces_button.setToolTip("Clear current detected faces in the camera")
+        self.clear_current_faces_button.clicked.connect(self._on_clear_current_faces)
 
         # Create camera widgets
         logger.debug('Creating Camera Widgets...')
 
         self.camera = CameraWidget(520,600, faces, faces_recognized, face_tracking=False, aspect_ratio=True)
-        self.recognize = FaceRecognize(faces, faces_recognized, face_new=faces_new)
+        self.recognize = FaceRecognize(faces, faces_recognized, face_new=faces_new, face_show_type="new")
 
         self.faces_new_thread = Thread(target=self.recognize_new_face_detection, args=())
         self.faces_new_thread.daemon = True
@@ -80,6 +81,9 @@ class MainWindow(QMainWindow):
         logger.debug('Verifying camera credentials...')  
 
         layout.addWidget(self.recognize.get_new_faces_view())
+        
+        #show progress dialog
+        self.loading_thread()
         
         #add logging textbox
         self.text_log = QtWidgets.QTextEdit(self)
@@ -107,16 +111,21 @@ class MainWindow(QMainWindow):
                 sb.setValue(sb.maximum())
 
         qt_handler = QTextEditLogger(self.text_log)
-        qt_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
-        logger.addHandler(qt_handler)
-        if logger.level == 0:
-            logger.setLevel(logging.INFO)
+        qt_handler.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
+        logger.addHandler(qt_handler) 
+        logger.setLevel(logging.WARNING)
 
         logger.info("Logging to text_log initialized.")
         
         w = QWidget()
         w.setLayout(layout)
         self.setCentralWidget(w)
+        
+    def _on_clear_current_faces(self):
+        db.clear_client()
+        if hasattr(self, 'recognize'):
+            self.recognize.clear_new_faces_view()
+        logger.info("Cleared current faces in client and updated recognize widget.")
 
     def _on_new_student(self):
         dlg = AddNewStudent(self)
@@ -157,15 +166,12 @@ class MainWindow(QMainWindow):
                     print("Prepared {} face(s) for upload".format(len(upload_faces)))
                     db.upsert_face_db(upload_faces)
                     db.clear_client()
+                    if hasattr(self, 'recognize'):
+                        self.recognize.clear_new_faces_view()
                 else:
                     print("No faces to upload after processing")
             except Exception as e:
-                print("Failed reloading DB after adding new student: {}".format(e))
-                
-            if hasattr(self, 'camera'):
-                self.camera.update_recognize()
-            if hasattr(self, 'recognize'):
-                self.recognize.reload_recognize_thread()
+                print("Failed reloading DB after adding new student: {}".format(e)) 
     
     def onSettingClick(self):
         dlg = SettingDialog(self)
@@ -197,6 +203,7 @@ class MainWindow(QMainWindow):
         """
         _widget = QWidget(self)
         _widget.setLayout(QVBoxLayout()) 
+        _widget.layout().addWidget(self.clear_current_faces_button)
         _widget.layout().addWidget(self.new_student_button)
         # _widget.layout().addWidget(self.camera.get_face_detected_frame())
         _widget.layout().addWidget(self.recognize.get_recognize_frame())        
@@ -227,8 +234,7 @@ class MainWindow(QMainWindow):
         self.progress_dialog.setValue(300)  # Update progress to 30%
         #Face data loading process
         self.progress_dialog.setLabelText("Face Data Loading...")
-        self.db = db.reload_db()
-        self.db.load_all_faces_to_client_with_filter()
+        db.reload_db(True)
         
         if hasattr(self, 'camera'):
             self.camera.update_recognize()

@@ -94,6 +94,10 @@ class FaceRecognize(QtWidgets.QWidget):
             self.view_widget.setReadOnly(True)
         return self.view_widget
     
+    def clear_new_faces_view(self):
+        if self.view_widget is not None:
+            self.view_widget.clear()
+    
     def get_recognize_frame(self, show_info=False):
         if self.recognize_frame is None:
             self.recognize_frame = FaceCompareWidget(self, show_info=show_info)
