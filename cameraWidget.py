@@ -41,8 +41,8 @@ class CameraWidget(QtWidgets.QWidget):
         self.screen_height = height - self.offset
         self.maintain_aspect_ratio = aspect_ratio
 
-        self.camera_stream_link = None
-
+        self.showing_face_seq = ""
+        
         # Flag to check if camera is valid/working
         self.online = False
         self.capture = None
@@ -66,7 +66,7 @@ class CameraWidget(QtWidgets.QWidget):
         # Periodically set video frame to display
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.set_frame)
-        self.timer.start(10)
+        self.timer.start(30)
 
     def load_network_stream(self):
         """detect and reconnect network stream if connection is lost"""
@@ -101,15 +101,15 @@ class CameraWidget(QtWidgets.QWidget):
         
         while True:
             if self.online:
-                commons.spin(5)
+                time.sleep(5)
                 continue
-            self.camera_stream_link = scan_camera_sources()
-            if verify_network_stream(self.camera_stream_link):
-                self.capture = cv2.VideoCapture(self.camera_stream_link)
+            camera_stream_link = scan_camera_sources()
+            if verify_network_stream(camera_stream_link):
+                self.capture = cv2.VideoCapture(camera_stream_link)
                 self.online = True
             else:
                 print("Camera stream not available.")
-                commons.spin(1)
+                time.sleep(1)
                 continue
 
     def get_frame(self):
@@ -129,15 +129,15 @@ class CameraWidget(QtWidgets.QWidget):
                         self.online = False 
                     dur = frame_time - (time.time() - t)
                     if dur > 0:
-                        commons.spin(dur)
+                        time.sleep(dur)
                 else:
-                    commons.spin(1)
+                    time.sleep(1)
             except Exception as e:
                 print("E:get_frame - ", e)
                 if self.capture:
                     self.capture.release()
                 self.online = False
-                commons.spin(1)
+                time.sleep(1)
                 pass
     
     def update_recognize(self):
@@ -206,15 +206,15 @@ class CameraWidget(QtWidgets.QWidget):
             if self.detect_face_thread_wait_stop:
                 break
             if self.wait_recognize and len(self.faces) >0: 
-                commons.spin(1)
+                time.sleep(1)
                 continue
             if len(self.deque) < 1:
-                commons.spin(1)
+                time.sleep(1)
                 continue
             
             t = time.time()
             try:
-                frame = (self.deque[-1]).copy()
+                frame = self.deque.pop()
                 face_objs = DeepFace.extract_faces(
                     img_path=frame.copy(),
                     detector_backend=self.detector_backend,
@@ -266,37 +266,23 @@ class CameraWidget(QtWidgets.QWidget):
             except Exception as e:
                 print("Detect face e: ", e)
                 logger.error("Error in detect_face: %s", str(e))
-                commons.spin(1)
+                time.sleep(1)
                 pass 
             
             finally:
                 dur = time.time() - t
                 if dur > 1.5:
                     logger.warning("Face detection time is too long: %s s", dur)
-                if dur < 0.5:
-                    commons.spin(0.5-dur)
+                elif dur < 0.5:
+                    time.sleep(0.5-dur)
                     
-    showing_face_seq = ""
-    def _safe_get(self, obj, *keys, default=None):
-        try:
-            cur = obj
-            for key in keys:
-                if cur is not None and isinstance(cur, dict):
-                    cur = cur.get(key, None)
-                elif hasattr(cur, key):
-                    cur = getattr(cur, key)
-                else:
-                    return default
-            return cur
-        except Exception as e:
-            print("Error in _safe_get: ", e)
-            return default
+    
 
     def get_face_note_text(self,face):
         face_recognized_item = self.face_recognized[-1] if len(self.face_recognized) > 0 else None
         face_recognized_seq_id = face_recognized_item.get("seq_id", "") if face_recognized_item is not None else ""
-        face_recognized = self._safe_get(face_recognized_item, "recognized")
-        recognized_msv = self._safe_get(face_recognized_item, "recognized", "payload", "msv")
+        face_recognized = commons._safe_get(face_recognized_item, "recognized")
+        recognized_msv = commons._safe_get(face_recognized_item, "recognized", "payload", "msv")
 
         face_seq_id = face.get("seq_id", "") if face is not None else ""
         seq_last8 = face_seq_id[-8:] if face_seq_id else ""

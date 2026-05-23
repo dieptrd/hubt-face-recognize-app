@@ -9,7 +9,7 @@ from appSettings import settings
 import commons
 
 class Faces:
-    def __init__(self, db):
+    def __init__(self, db:QdrantClient = None):
         self.db = db
         self.collection_name = settings.get("VECTORDB", "COLLECTION_NAME", fallback="hubt_faces")
         
@@ -35,7 +35,7 @@ class Faces:
             logger.error("Error getting points count: %s", e)
             return 0
     
-    def load_all_faces(self, payload_key, filter_list=None):
+    def load_all_faces(self, payload_key:str ="msv", filter_list=None):
         offset = 0
         total = 0
         faces = []
@@ -45,7 +45,7 @@ class Faces:
             scroll_filter = models.Filter(
                 must=[
                     models.FieldCondition(
-                        key="payload_key",
+                        key=payload_key,
                         match=models.MatchAny(any=filter_list),
                     ),
                 ]
@@ -79,6 +79,7 @@ class Faces:
     def clear(self):
         try:
             self.db.delete_collection(collection_name=self.collection_name)
+            self.db.close()
             logger.info("Collection '{}' cleared".format(self.collection_name))
         except Exception as e:
             logger.error("Error clearing DB: %s", e)
@@ -136,12 +137,110 @@ class Faces:
         return False
 
 
+class RemoteFaces(Faces):
+    def __init__(self):
+        super().__init__(None)
+        self.reload() 
+        
+    def reload(self): 
+        self.close()
+        self.host = settings.get("VECTORDB","HOST", fallback= "localhost")
+        self.port = settings.getint("VECTORDB","PORT", fallback= 6333)
+        self.collection_name = settings.get("VECTORDB", "COLLECTION_NAME", fallback="hubt_faces")
+        self.vector_size = settings.getint("VECTORDB", "VECTOR_SIZE", fallback= 4096) 
+        try:  
+            db = self.db = QdrantClient(self.host, port=self.port)
+            # Ensure remote collection exists; create it if missing
+            try:
+                db.get_collection(collection_name=self.collection_name)
+                print("Remote collection '{}' exists".format(self.collection_name))
+            except Exception:
+                print("Remote collection '{}' not found, creating...".format(self.collection_name))
+                db.create_collection(
+                    collection_name= self.collection_name,
+                    vectors_config= VectorParams(
+                        size=self.vector_size, 
+                        distance=Distance.COSINE,
+                        multivector_config=models.MultiVectorConfig(
+                            comparator=models.MultiVectorComparator.MAX_SIM
+                        )
+                    ),
+                )
+            self.db = db
+        except Exception as e:
+            print("Error connecting to DB: ", e) 
+            self.db = None
+
+class ClientFaces(Faces):
+    def __init__(self):
+        super().__init__(None)
+        self.reload()
+        
+    def reload(self):
+        self.close()
+        client_path = os.path.join("./vectordb","client") 
+        client = QdrantClient(path=client_path)
+        try:
+            client.get_collection(collection_name=self.collection_name)
+            print("Client collection '{}' exists".format(self.collection_name))
+        except Exception:
+            print("Client collection '{}' not found, creating...".format(self.collection_name))
+            client.create_collection(
+                collection_name= self.collection_name,
+                vectors_config= VectorParams(
+                    size=self.vector_size, 
+                    distance=Distance.COSINE,
+                    multivector_config=models.MultiVectorConfig(
+                        comparator=models.MultiVectorComparator.MAX_SIM
+                    )
+                ),
+            )
+        self.db = client
+        return self
+
+
+class ImportFaces(Faces):
+    def __init__(self, db = None):
+        super().__init__(db)
+        self.reload()
+        
+    def reload(self):
+        self.close()
+        client_path = os.path.join("./vectordb","import") 
+        client = QdrantClient(path=client_path)
+        try:
+            client.get_collection(collection_name=self.collection_name)
+            print("Client collection '{}' exists".format(self.collection_name))
+        except Exception:
+            print("Client collection '{}' not found, creating...".format(self.collection_name))
+            client.create_collection(
+                collection_name= self.collection_name,
+                vectors_config= VectorParams(
+                    size=self.vector_size, 
+                    distance=Distance.COSINE,
+                    multivector_config=models.MultiVectorConfig(
+                        comparator=models.MultiVectorComparator.MAX_SIM
+                    )
+                ),
+            )
+        self.db = client
+        return self
+    
+    def upsert_face(self, id, vector, payload = {}):
+        point = PointStruct(
+                        id=id,
+                        vector=vector,
+                        payload=payload
+                    )
+        super().upsert_faces([point])
+        return self
+    
 class DbProvider:
     def __init__(self):
         self.host = None
-        self.client = None
-        self.import_client = None
-        self.db = None
+        self.client:ClientFaces = ClientFaces()
+        self.import_client:ImportFaces = ImportFaces()
+        self.db:RemoteFaces = RemoteFaces()
     
     def close(self):
         self.host = settings.get("VECTORDB","HOST", fallback= "localhost")
@@ -296,7 +395,7 @@ class DbProvider:
                     with_payload=True,
                     with_vectors=True,
                 )
-                
+                n
                 client.upsert(
                     collection_name=self.collection_name,
                     wait=True,
