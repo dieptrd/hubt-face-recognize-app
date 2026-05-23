@@ -100,6 +100,8 @@ class CameraWidget(QtWidgets.QWidget):
             return True
         
         while True:
+            if getattr(self, "load_video_thread_wait_stop", False):
+                break
             if self.online:
                 time.sleep(5)
                 continue
@@ -276,7 +278,32 @@ class CameraWidget(QtWidgets.QWidget):
                 elif dur < 0.5:
                     time.sleep(0.5-dur)
                     
-    
+    def closeEvent(self, event):
+        """
+        Sự kiện tự động kích hoạt khi Widget bị đóng (Close).
+        Dùng để giải phóng camera và tắt toàn bộ Thread/Worker ngầm.
+        """
+        print(f"[Main] Đang giải phóng tài nguyên cho CameraWidget...")
+        logger.info("Closing CameraWidget, stopping all background tasks.")
+
+        # 1. Dừng QTimer cập nhật giao diện
+        if hasattr(self, 'timer') and self.timer.isActive():
+            self.timer.stop()
+                
+        if self.load_video_thread.is_alive():
+            self.load_video_thread_wait_stop = True
+            self.load_video_thread.join()
+
+        # 3. Giải phóng kết nối OpenCV Camera (Sẽ làm cho luồng get_frame tự thoát)
+        self.online = False
+        if hasattr(self, 'capture') and self.capture:
+            if self.capture.isOpened():
+                self.capture.release()
+            print("[Main] Đã release OpenCV Capture.") 
+
+        # 5. Chấp nhận sự kiện đóng Widget
+        event.accept()
+        print("[Main] Toàn bộ tài nguyên đã được giải phóng sạch sẽ!")
 
     def get_face_note_text(self,face):
         face_recognized_item = self.face_recognized[-1] if len(self.face_recognized) > 0 else None
@@ -295,6 +322,9 @@ class CameraWidget(QtWidgets.QWidget):
         return ""
 
     def set_frame(self):
+        if getattr(self, "frame_display_progress", False):
+            return
+        self.frame_display_progress = True
         """Sets pixmap image to video frame"""
         if not self.online:
             def create_connecting_image(width, height):
@@ -313,6 +343,7 @@ class CameraWidget(QtWidgets.QWidget):
             pix = QtGui.QPixmap.fromImage(img)
             self.video_frame.setPixmap(pix)
             commons.spin(1)
+            self.frame_display_progress = False
             return
 
         face = self.last_face[-1] if len(self.last_face) > 0 else None
@@ -368,6 +399,8 @@ class CameraWidget(QtWidgets.QWidget):
 
         if face is not None and seq_id != self.showing_face_seq:
             self.showing_face_seq = seq_id
+            
+        self.frame_display_progress = False
     
     def get_video_frame(self):
         return self.video_frame

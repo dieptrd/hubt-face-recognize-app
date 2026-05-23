@@ -214,7 +214,7 @@ class MainWindow(QMainWindow):
         worker.finished.connect(self.reload_recognize_widget)
         # exec_with_thread will create and start a QThread and move the worker there
         finished = dialog.exec_with_thread(30000)
-        print('Loading dialog finished: %s', finished)
+        print(f'Loading dialog finished: {finished}')
         
     def reload_recognize_widget(self):
         """
