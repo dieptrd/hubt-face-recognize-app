@@ -115,7 +115,7 @@ class Faces:
 
     def add_vector(self, id, vector):
         try: 
-            point = self.get_face()
+            point = self.get_face(id)
             vectors = commons._safe_get(point, "vectors") if point is not None else []
             payload = commons._safe_get(point, "payload") if point is not None else {}
             vectors.extend(vector)
@@ -218,9 +218,9 @@ class ImportFaces(Faces):
                 vectors_config= VectorParams(
                     size=self.vector_size, 
                     distance=Distance.COSINE,
-                    multivector_config=models.MultiVectorConfig(
-                        comparator=models.MultiVectorComparator.MAX_SIM
-                    )
+                    # multivector_config=models.MultiVectorConfig(
+                    #     comparator=models.MultiVectorComparator.MAX_SIM
+                    # )
                 ),
             )
         self.db = client

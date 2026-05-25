@@ -26,6 +26,7 @@ from PyQt5 import QtCore
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = "0"  
 
 class MainWindow(QMainWindow):
+
     """
     The main window of the application.
 
@@ -83,7 +84,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.recognize.get_new_faces_view())
         
         #show progress dialog
-        self.loading_thread()
+        # self.loading_thread()
         
         #add logging textbox
         self.text_log = QtWidgets.QTextEdit(self)
@@ -120,6 +121,31 @@ class MainWindow(QMainWindow):
         w = QWidget()
         w.setLayout(layout)
         self.setCentralWidget(w)
+        
+    def showEvent(self, event):
+        super().showEvent(event)
+        #show progress dialog
+        #Face data clear
+        db.reload_db(True)
+        
+        if hasattr(self, 'camera'):
+            self.camera.update_recognize()
+        if hasattr(self, 'recognize'):
+            self.recognize.reload_recognize_thread()
+        
+    
+    def closeEvent(self, event):
+        """Called when the main window is closing."""
+        try:
+            if hasattr(self, 'camera'):
+                # Ensure CameraWidget threads stop even if CameraWidget.closeEvent
+                # is not triggered during app shutdown.
+                self.camera.stop()
+                # self.camera.close()
+        finally:
+            super().closeEvent(event)
+
+        event.accept()
         
     def _on_clear_current_faces(self):
         db.clear_client()

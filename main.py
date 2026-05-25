@@ -147,12 +147,17 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(w)
         
     def closeEvent(self, event):
-        """
-        This method is automatically called when the window tries to close.
-        """
-        super().closeEvent(event)
-        # if hasattr(self, 'camera'):
-        #     self.camera.close()
+        """Called when the main window is closing."""
+        try:
+            if hasattr(self, 'camera'):
+                # Ensure CameraWidget threads stop even if CameraWidget.closeEvent
+                # is not triggered during app shutdown.
+                self.camera.stop()
+                # self.camera.close()
+        finally:
+            super().closeEvent(event)
+
+        event.accept()
             
         
     def showEvent(self, event):

@@ -23,7 +23,7 @@ class CameraWidget(QtWidgets.QWidget):
     @param detector_backend (string): set face detector backend to opencv, retinaface, mtcnn, ssd, dlib, mediapipe or yolov8.
     """
 
-    def __init__(self, width, height, faces, face_recognized, aspect_ratio=False, parent=None, fps=16, face_tracking=None, deque_size=1, face_confidence_threshold=0.7):
+    def __init__(self, width, height, faces, face_recognized, aspect_ratio=False, parent=None, fps=16, face_tracking=None, deque_size=2, face_confidence_threshold=0.7):
         super(CameraWidget, self).__init__(parent)
         
         # Initialize deque used to store frames read from the stream
@@ -51,12 +51,13 @@ class CameraWidget(QtWidgets.QWidget):
 
         # Start background video source loading
         self.load_video_thread_count = 0
-        self.load_video_thread = Thread(target=self.load_network_stream, args=())
-        self.load_video_thread.daemon = True
+        # shutdown coordination for background loops
+        self._stopping = False
+        self.load_video_thread = Thread(target=self.load_network_stream, args=(), daemon=True)
+
 
         # Start background frame grabbing
-        self.get_frame_thread = Thread(target=self.get_frame, args=())
-        self.get_frame_thread.daemon = True
+        self.get_frame_thread = Thread(target=self.get_frame, args=(), daemon=True) 
         self.get_frame_thread.start()
 
         #start background face detecting
@@ -74,12 +75,15 @@ class CameraWidget(QtWidgets.QWidget):
             try:
                 camera_sources = []
                 for i in range(10):
-                    self.load_video_thread_count += 1
-                    cap = cv2.VideoCapture(i)
-                    if cap.isOpened():
-                        camera_sources.append(i)
-                        cap.release()
-                        break
+                    try:
+                        self.load_video_thread_count += 1
+                        cap = cv2.VideoCapture(i)
+                        if cap.isOpened():
+                            camera_sources.append(i)
+                            cap.release()
+                            break
+                    except Exception as e:
+                        print(f"{e}")
                 if camera_sources:
                     return camera_sources[0]
                 else:
@@ -99,9 +103,7 @@ class CameraWidget(QtWidgets.QWidget):
             cap.release()
             return True
         
-        while True:
-            if getattr(self, "load_video_thread_wait_stop", False):
-                break
+        while not getattr(self, "_stopping", False):
             if self.online:
                 time.sleep(5)
                 continue
@@ -118,7 +120,7 @@ class CameraWidget(QtWidgets.QWidget):
         """Reads frame, resizes, and converts image to pixmap"""
         frame_time = 1 / self.fps
         t = time.time()
-        while True:
+        while not getattr(self, "_stopping", False):
             try:
                 if self.capture and self.online:
                     # Read next frame from stream and insert into deque
@@ -138,9 +140,12 @@ class CameraWidget(QtWidgets.QWidget):
                 print("E:get_frame - ", e)
                 if self.capture:
                     self.capture.release()
+                    
                 self.online = False
                 time.sleep(1)
                 pass
+        if hasattr(self, "capture") and self.capture.isOpened():
+            self.capture.release()
     
     def update_recognize(self):
         
@@ -153,7 +158,7 @@ class CameraWidget(QtWidgets.QWidget):
         if self.detect_face_thread:
             while(self.detect_face_thread.is_alive()):
                 self.detect_face_thread_wait_stop = True
-                commons.spin(0.1)
+                self.detect_face_thread.join()
                 
         self.detector_backend = settings.get("PROCESSING", "DETECTED_METHOD", fallback="retinaface")
         self.wait_recognize = settings.get("PROCESSING", "WAIT_RECOGNIZED", fallback="True") == "True"
@@ -168,14 +173,13 @@ class CameraWidget(QtWidgets.QWidget):
 
         print(f'detector: {self.detector_backend}, slow: {self.wait_recognize}, stable: {self.detected_face_stable}')
 
-        self.detect_face_thread = Thread(target=self.detect_face, args=())
-        self.detect_face_thread.daemon = True
-        self.detect_face_thread_wait_stop = False
+        self.detect_face_thread = Thread(target=self.detect_face, args=(), daemon=True)
         self.detect_face_thread.start()
 
     def get_largest_face(self, faces):
         if not faces: return None
-        return max(faces, key=lambda face: (face["facial_area"]["w"] * face["facial_area"]["h"]))
+        face = max(faces, key=lambda face: (face["facial_area"]["w"] * face["facial_area"]["h"]))
+        return face if (face["facial_area"]["w"] * face["facial_area"]["h"]) >= 250*250 else None
 
     def calculate_face_iou(self, face, face_last):
         x1, y1, w1, h1 = face["x"], face["y"], face["w"], face["h"]
@@ -202,9 +206,10 @@ class CameraWidget(QtWidgets.QWidget):
     def detect_face(self):
         """get face from frame""" 
         # build models once to store them in the memory
-        # otherwise, they will be built after cam started and this will cause delays 
+        # otherwise, they will be built after cam started and this will cause delays  
+        self.detect_face_thread_wait_stop = False
         num_frames_with_faces = 0
-        while True:            
+        while not getattr(self, "_stopping", False):     
             if self.detect_face_thread_wait_stop:
                 break
             if self.wait_recognize and len(self.faces) >0: 
@@ -278,31 +283,34 @@ class CameraWidget(QtWidgets.QWidget):
                 elif dur < 0.5:
                     time.sleep(0.5-dur)
                     
-    def closeEvent(self, event):
+    def stop(self):
         """
         Sự kiện tự động kích hoạt khi Widget bị đóng (Close).
         Dùng để giải phóng camera và tắt toàn bộ Thread/Worker ngầm.
         """
         print(f"[Main] Đang giải phóng tài nguyên cho CameraWidget...")
         logger.info("Closing CameraWidget, stopping all background tasks.")
-
+        self._stopping = True
         # 1. Dừng QTimer cập nhật giao diện
         if hasattr(self, 'timer') and self.timer.isActive():
             self.timer.stop()
-                
-        if self.load_video_thread.is_alive():
-            self.load_video_thread_wait_stop = True
-            self.load_video_thread.join()
 
         # 3. Giải phóng kết nối OpenCV Camera (Sẽ làm cho luồng get_frame tự thoát)
         self.online = False
         if hasattr(self, 'capture') and self.capture:
             if self.capture.isOpened():
                 self.capture.release()
-            print("[Main] Đã release OpenCV Capture.") 
-
-        # 5. Chấp nhận sự kiện đóng Widget
-        event.accept()
+            print("[Main] Đã release OpenCV Capture.")  
+        
+        if self.load_video_thread.is_alive(): 
+            self.load_video_thread.join()
+            
+        if self.get_frame_thread.is_alive():
+            self.get_frame_thread.join()
+            
+        if self.detect_face_thread.is_alive():
+            self.detect_face_thread.join() 
+            
         print("[Main] Toàn bộ tài nguyên đã được giải phóng sạch sẽ!")
 
     def get_face_note_text(self,face):

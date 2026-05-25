@@ -58,7 +58,7 @@ class FaceRecognize(QtWidgets.QWidget):
         # Periodically set video frame to display
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.ui_update)
-        self.timer.start(2)
+        self.timer.start(200)
 
     def ui_update(self):
         while self.text_log and self.view_widget is not None: 
@@ -105,12 +105,9 @@ class FaceRecognize(QtWidgets.QWidget):
 
     def reload_recognize_thread(self):
         # Wait last thread stop before start new thread
-        if self.recognize_thread:
-            while(self.recognize_thread.is_alive()):
-                self.recognize_thread_wait_stop = True
-                commons.spin(0.5)
-        
-        self.recognize_thread_wait_stop = False
+        if self.recognize_thread and self.recognize_thread.is_alive():
+            self.recognize_thread_wait_stop = True
+            self.recognize_thread.join()
         
         #reload setting
         self.collection_name = settings.get("VECTORDB", "COLLECTION_NAME", fallback="hubt_faces")
@@ -118,12 +115,11 @@ class FaceRecognize(QtWidgets.QWidget):
         self.model_name = settings.get("PROCESSING", "RECOGNIZE_METHOD", fallback="VGG-Face")
         
         #load all faces from db to local client
-        self.recognize_thread = Thread(target=self.recognize, args=())
-        self.recognize_thread.daemon = True
-        self.recognize_thread_wait_stop = False
+        self.recognize_thread = Thread(target=self.recognize, args=(), daemon = True)
         self.recognize_thread.start()
 
-    def recognize(self):        
+    def recognize(self):     
+        self.recognize_thread_wait_stop = False   
         while True:
             if self.recognize_thread_wait_stop:
                 break 
@@ -179,10 +175,10 @@ class FaceRecognize(QtWidgets.QWidget):
                                 self.face_new.append((id,represent[0].get("embedding"), payload))
                             self.recognize_frame_queue.append((face_mark, None))
                 else:
-                    commons.spin(0.5)
+                    time.sleep(0.5)
             except Exception as error:
                 logger.error("recognize error: %s", error)
-                commons.spin(1)
+                time.sleep(1)
                 pass
     
     def _rever_image(self, img):
