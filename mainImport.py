@@ -18,7 +18,7 @@ from addNewStudent import AddNewStudent
 from cameraWidget import CameraWidget
 from faceRecognize import FaceRecognize
 from logger import logger
-from db import db
+from dbProvider import db
 import commons
 import logging
 from PyQt5 import QtCore
@@ -70,11 +70,16 @@ class MainWindow(QMainWindow):
         logger.debug('Creating Camera Widgets...')
 
         self.camera = CameraWidget(520,600, faces, faces_recognized, face_tracking=False, aspect_ratio=True)
-        self.recognize = FaceRecognize(faces, faces_recognized, face_new=faces_new, face_show_type="new")
+        self.recognize = FaceRecognize(
+            faces, 
+            faces_recognized, 
+            face_new=faces_new, 
+            face_show_type="new",
+            recognize_score_threshold=0.8
+        )
 
-        self.faces_new_thread = Thread(target=self.recognize_new_face_detection, args=())
-        self.faces_new_thread.daemon = True
-        self.faces_new_thread_wait_stop = False
+        self.faces_new_thread = Thread(target=self.recognize_new_face_detection, args=(), daemon = True)
+        self._wait_stop = False
         self.faces_new_thread.start()
         # Add widgets to layout
         logger.debug('Adding Camera and Faces recognize widget to layout...')
@@ -126,7 +131,7 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         #show progress dialog
         #Face data clear
-        db.reload_db(True)
+        db.reload(True)
         
         if hasattr(self, 'camera'):
             self.camera.update_recognize()
@@ -136,6 +141,8 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """Called when the main window is closing."""
+        self._wait_stop = True
+        self.faces_new_thread.join()
         try:
             if hasattr(self, 'camera'):
                 # Ensure CameraWidget threads stop even if CameraWidget.closeEvent
@@ -148,12 +155,47 @@ class MainWindow(QMainWindow):
         event.accept()
         
     def _on_clear_current_faces(self):
-        db.clear_client()
+        db.get_client().clear().reload()
         if hasattr(self, 'recognize'):
             self.recognize.clear_new_faces_view()
         logger.info("Cleared current faces in client and updated recognize widget.")
 
     def _on_new_student(self):
+        def calculate_frontal_score(face_data):
+            """
+            Tính toán điểm số nhìn thẳng dựa trên độ đối xứng của mắt.
+            Score càng gần 0, mặt càng thẳng tuyệt đối.
+            """
+            face_area = commons._safe_get(face_data,"payload","face_area", default={})
+            
+            # 1. Lấy tọa độ mắt (x, y)
+            # Lưu ý: JSON của bạn định dạng [0: x_val, 1: y_val]
+            left_eye = face_area.get("left_eye", [])
+            right_eye = face_area.get("right_eye", [])
+            
+            if not left_eye or not right_eye:
+                return float('inf') # Không đủ dữ liệu điểm mốc
+                
+            lx, ly = left_eye[0], left_eye[1]
+            rx, ry = right_eye[0], right_eye[1]
+            
+            # 2. Xác định tâm trục dọc của khuôn mặt (Face Center X)
+            # Dựa vào bounding box: x + w/2
+            face_center_x = face_area["x"] + (face_area["w"] / 2)
+            
+            # 3. Tính khoảng cách ngang từ tâm mặt tới mỗi mắt
+            dist_to_left = abs(face_center_x - lx)
+            dist_to_right = abs(face_center_x - rx)
+            
+            # 4. Tính toán độ lệch đối xứng (Yaw Score)
+            # Nếu mặt thẳng tuyệt đối: dist_to_left == dist_to_right -> yaw_score = 0
+            total_dist = dist_to_left + dist_to_right
+            if total_dist == 0:
+                return 0
+                
+            yaw_score = abs(dist_to_left - dist_to_right) / total_dist
+            return yaw_score
+
         dlg = AddNewStudent(self)
         result = dlg.exec()
         print("Add new student dialog result: %s", result)
@@ -165,33 +207,34 @@ class MainWindow(QMainWindow):
                     logger.debug("No new student info returned from dialog")
                     return
 
-                print("New student info: msv={} fullname={}".format(getattr(info, "msv", None), getattr(info, "fullname", None)))
+                print("New student info: ", info)
                 
-                faces = db.get_all_faces_client() or []
+                (faces, _) = db.get_client().load_all_faces() or ([],0)
                 if not faces:
                     logger.debug("No faces in client to update")
                     return
  
                 if len(faces) > 0:
                     print("Uploading {} face(s) to DB".format(len(faces)))
-                    upload_faces = []
+                    upload_vectors = []
+                    
+                    face = min(faces, key= lambda f: calculate_frontal_score(f))
+                    print(face)
+                    id = commons._safe_get(face,"id", default=None)
+                    payload = {
+                        "msv": commons._safe_get(info, "msv", default=""),
+                        "fullname": commons._safe_get(info, "fullname", default=""),
+                        "tel": commons._safe_get(info, "tel", default=""),
+                        "face": commons._safe_get(face, "payload", "face", default=None),
+                        "face_area": commons._safe_get(face, "payload", "face_area", default=None),
+                        "frame": commons._safe_get(face, "payload", "frame", default=None)
+                    }
                     for face in faces:
-                        payload = {
-                            "msv": commons._safe_get(info, "msv", default=""),
-                            "fullname": commons._safe_get(info, "fullname", default=""),
-                            "tel": commons._safe_get(info, "tel", default=""),
-                            "face": commons._safe_get(face, "payload", "face", default=None),
-                            "face_area": commons._safe_get(face, "payload", "face_area", default=None),
-                            "frame": commons._safe_get(face, "payload", "frame", default=None)
-                        }
-                        upload_faces.append(PointStruct(
-                            id=face.id,
-                            vector=face.vector,
-                            payload=payload
-                        ))
-                    print("Prepared {} face(s) for upload".format(len(upload_faces)))
-                    db.upsert_face_db(upload_faces)
-                    db.clear_client()
+                        upload_vectors.extend(face.vector)
+                        
+                    print("Prepared {} face(s) for upload".format(len(upload_vectors)))
+                    db.get_db().upsert_face(id, upload_vectors, payload)
+                    db.get_client().clear().reload()
                     if hasattr(self, 'recognize'):
                         self.recognize.clear_new_faces_view()
                 else:
@@ -205,7 +248,7 @@ class MainWindow(QMainWindow):
         if result:
             dlg.updateChanged()
             self.loading_thread()
-        logger.debug("dialog result: %s", result)
+        logger.debug(f"dialog result: {result}")
 
     def init_regcognize_video_frame(self):
         """
@@ -276,14 +319,12 @@ class MainWindow(QMainWindow):
         This method runs in a separate thread and checks for new faces detected by the camera.
         If a new face is detected, it updates the recognize widget with the new face information.
         """
-        while True:
-            if self.faces_new_thread_wait_stop:
-                logger.debug("Stopping recognize_new_face_detection thread.")
-                break
+        _id = ""
+        while not self._wait_stop: 
             if len(faces_new) > 0:
                 print("New face detected.")
                 (id, vector, payload) = faces_new.pop()
-                db.upsert_face_client(id, vector, payload)
+                db.get_client().upsert_face(id, vector, payload)
             else:
                 commons.spin(0.2)
 

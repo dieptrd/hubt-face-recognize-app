@@ -15,7 +15,7 @@ from faceRecognize import FaceRecognize
 from loadingDialog import LoadingDialog
 from logger import logger
 import logging
-from db import db
+from dbProvider import db
 
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = "0"  
 
@@ -42,7 +42,7 @@ class Worker(QtCore.QObject):
 
         # Simulated work / progress update
         self.progress.emit(50, "Loading database...")
-        self.db = db.reload_db(True)
+        self.db = db.reload(True)
         number_points = self.db.load_all_faces_to_client_with_filter()
         self.progress.emit(100, "Loading complete.")
         # signal finished so the dialog/thread can quit

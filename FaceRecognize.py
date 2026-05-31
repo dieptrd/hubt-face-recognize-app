@@ -23,14 +23,14 @@ from qdrant_client.http.models import Distance, VectorParams, PointStruct
 
 from appSettings import settings
 from faceCompareWidget import FaceCompareWidget
-from db import db
+from dbProvider import db
 import commons
 
 class FaceRecognize(QtWidgets.QWidget):
-    def __init__(self, faces, face_recognized, face_new=None, face_show_type= "all", parent=None) -> None:
+    def __init__(self, faces, face_recognized, face_new=None, face_show_type= "all", recognize_score_threshold=0.7, parent=None) -> None:
         '''
         faces: list of face detected from camera, each item is a dict with keys: id, frame, face_crop, facial_area
-        face_recognized: list to append recognized face, each item is a dict with keys: id, frame, face_crop, facial_area, recognized (item in db)
+        face_recognized: list to append recognized face, each item is a dict with keys: id, frame, face_crop, facial_area, recognized (item in database)
         face_new: list to append new face, each item is a tuple of (id, represent, payload)
         '''
         super(FaceRecognize, self).__init__(parent)     
@@ -39,6 +39,7 @@ class FaceRecognize(QtWidgets.QWidget):
         self.face_new = face_new
         # face_show_type: "all" (default) to show all, "recognized" to show only recognized faces, "new" to show only new faces
         self.face_show_type = face_show_type
+        self.recognize_score_threshold = recognize_score_threshold
 
         self.collection_name = settings.get("VECTORDB", "COLLECTION_NAME", fallback="hubt_faces")
         self.vector_size = settings.getint("VECTORDB", "VECTOR_SIZE", fallback= 4096) 
@@ -114,7 +115,7 @@ class FaceRecognize(QtWidgets.QWidget):
         self.vector_size = settings.getint("VECTORDB", "VECTOR_SIZE", fallback= 4096)
         self.model_name = settings.get("PROCESSING", "RECOGNIZE_METHOD", fallback="VGG-Face")
         
-        #load all faces from db to local client
+        #load all faces from database to local client
         self.recognize_thread = Thread(target=self.recognize, args=(), daemon = True)
         self.recognize_thread.start()
 
@@ -126,8 +127,15 @@ class FaceRecognize(QtWidgets.QWidget):
             try:
                 if(len(self.faces) > 0):
                     # print("Start recognize face...")
-                    #crop full face with background
-                    face = self.faces.pop()
+                    # pick the "front" face (largest detected area) instead of last detected
+                    def _area_key(f):
+                        fa = f.get("facial_area") or {}
+                        w = fa.get("w", 0)
+                        h = fa.get("h", 0)
+                        return w * h
+
+                    face = max(self.faces, key=_area_key)
+                    self.faces.remove(face)
 
                     frame = face['frame']
                     # crop detected face with some outsize
@@ -147,33 +155,42 @@ class FaceRecognize(QtWidgets.QWidget):
                         normalization="VGGFace",
                         detector_backend= "skip"
                     ) 
-                    toc = time.time() - tic
                     # logger.info("Face recognition time: %s, face_confidence: %s", toc, represent[0].get("face_confidence") if represent is not None and len(represent) > 0 else 0)
-                    print("Face recognition time: ", toc)
+                    
                     item_in_db = None
-                    #check unique face in local db
+                    #check unique face in local database
                     if(represent is not None and len(represent) > 0):
-                        item_in_db = self.find_face_in_db(represent= represent[0].get("embedding"))
+                        
+                        # Ensure embedding shape is always 1D for Qdrant + verification
+                        embedding = represent[0].get("embedding")
+                        if isinstance(embedding, list):
+                            embedding = np.asarray(embedding)
+                        if isinstance(embedding, np.ndarray) and embedding.ndim == 2:
+                            embedding = embedding[0]
+                            
+                        item_in_db = self.find_face_in_db(embedding)
                         if item_in_db is not None:
                             recognized_item = face.copy()
                             recognized_item["recognized"] = item_in_db
-                            
                             self.recognize_frame_queue.append((face_mark, item_in_db))
                             if self.face_recognized is not None:
                                 self.face_recognized.append(recognized_item)
                         else:
                             id = face.get("id", str(uuid.uuid4()))
-                            # self.text_log.append("Face detected not found in local db.") 
-                            self.text_log.append((face_mark, "add new face to db: " + id))
+                            # self.text_log.append("Face detected not found in local database.") 
+                            self.text_log.append((face_mark, "add new face to database: " + id))
                             payload= {
                                 "face_area": face_area,
                                 "face": self.convert_image_base64(face_mark),
                                 "frame": self.convert_image_base64(frame),
                             }
-                            
                             if self.face_new is not None: 
-                                self.face_new.append((id,represent[0].get("embedding"), payload))
+                                self.face_new.append((id, embedding, payload))
                             self.recognize_frame_queue.append((face_mark, None))
+
+                    toc = time.time() - tic
+                    score = commons._safe_get(item_in_db,"score", default=0) if item_in_db is not None else 0
+                    print(f"Face recognition time: {toc}, score: {score}")
                 else:
                     time.sleep(0.5)
             except Exception as error:
@@ -208,43 +225,22 @@ class FaceRecognize(QtWidgets.QWidget):
         return f'data:image/{ext};base64,' + img_base64
     
     def find_face_in_db(self, represent):
-        resp =  db.get_client().query_points(
-            collection_name= self.collection_name, 
-            query= represent,
-            with_vectors=True,
-            with_payload=True,
-            limit= 5,
-            search_params=models.SearchParams(hnsw_ef=128, exact=True),
-            score_threshold=0.7
-        )
-        
-        data = self._normalize_qdrant_response(resp)   
-
-        min_item = min(data, key=lambda x: verification.find_distance(x.vector, represent, "cosine")) if len(data) > 0 else None
-        # print("find_face_in_db: ", min_item.id, min_item.score) if min_item is not None else print("find_face_in_db: no item found" )
-        # print ("find_face_in_db: ", len(data), " min distance: ", verification.find_distance(min_item.vector, represent, "cosine") if min_item is not None else None)   
-        
-        # if min_item is not None and verification.find_distance(min_item.vector, represent, "cosine") < throw:
-        #     return min_item
-
-        #add item if not found
-        if min_item is None:
-            print("New face unrecognize!")  
-        else:
-            print("Face recognized in db: ", min_item.id, " distance: ", verification.find_distance(min_item.vector, represent, "cosine"))
-        return min_item
-    
-    def get_face_in_db(self, id):
-        if id is None:
-            return None
-
-        data =  db.get_client().retrieve(
-            collection_name= self.collection_name,
-            ids= [id],
-            with_vectors=True,
-            with_payload=True
-        )
+        resp =  db.get_client().find(represent, score_threshold=self.recognize_score_threshold)
+        data = self._normalize_qdrant_response(resp)
         return data[0] if len(data) > 0 else None
+        # min_item = min(data, key=lambda x: verification.find_distance(x.vector, represent, "cosine")) if len(data) > 0 else None
+        # # print("find_face_in_db: ", min_item.id, min_item.score) if min_item is not None else print("find_face_in_db: no item found" )
+        # # print ("find_face_in_db: ", len(data), " min distance: ", verification.find_distance(min_item.vector, represent, "cosine") if min_item is not None else None)   
+        
+        # # if min_item is not None and verification.find_distance(min_item.vector, represent, "cosine") < throw:
+        # #     return min_item
+
+        # #add item if not found
+        # if min_item is None:
+        #     print("New face unrecognize!")  
+        # else:
+        #     print("Face recognized in database: ", min_item.id, " distance: ", verification.find_distance(min_item.vector, represent, "cosine"))
+        # return min_item
 
     def _normalize_qdrant_response(self, resp):
         """

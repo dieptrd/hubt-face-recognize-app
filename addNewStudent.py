@@ -8,7 +8,7 @@ from qdrant_client.http.models import Distance, VectorParams, PointStruct
 from appSettings import settings
 import time
 import threading
-from db import db
+from dbProvider import db
 import commons
 
 class AddNewStudent(QDialog):
@@ -114,7 +114,7 @@ class AddNewStudent(QDialog):
         self.facesWidget.setReadOnly(True)
         layout.addWidget(self.facesWidget)
         widget.setLayout(layout)
-        faces = db.get_all_faces_client()
+        (faces, _) = db.get_client().load_all_faces()
         for faceitem in faces:
             face = commons._safe_get(faceitem, "payload", "face", default=None)
             self.facesWidget.insertHtml("<img src='{}'> {}".format(face, " ")) 

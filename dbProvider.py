@@ -2,7 +2,18 @@ import os
 from logger import logger
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from qdrant_client.http.models import VectorParams, Distance, MultiVectorConfig, PointStruct
+from qdrant_client.models import (
+    Distance,
+    Query,
+    VectorParams,
+    MultiVectorConfig,
+    MultiVectorComparator,
+    QuantizationConfig,
+    ScalarQuantization,
+    ScalarType,
+    HnswConfigDiff,
+    PointStruct
+)
 import uuid
 
 from appSettings import settings
@@ -27,10 +38,10 @@ class Faces:
     
     def count(self):
         try:
-            count = self.db.count(
+            result = self.db.count(
                 collection_name=self.collection_name
             )
-            return count
+            return result.count
         except Exception as e:
             logger.error("Error getting points count: %s", e)
             return 0
@@ -74,16 +85,38 @@ class Faces:
     def close(self):
         if self.is_connected:
             self.db.close()
+            self.db = None
         return self
         
     def clear(self):
         try:
             self.db.delete_collection(collection_name=self.collection_name)
-            self.db.close()
             logger.info("Collection '{}' cleared".format(self.collection_name))
         except Exception as e:
             logger.error("Error clearing DB: %s", e)
         return self
+
+    def upsert_face(self, id, vector, payload): 
+        def is_2d_list(v):
+            # Kiểm tra biến v có phải là list, không rỗng, và phần tử đầu tiên cũng là list
+            return isinstance(v, list) and len(v) > 0 and isinstance(v[0], list)
+        try: 
+            self.db.upsert(
+                collection_name=self.collection_name,
+                wait=True,
+                points=[
+                    models.PointStruct(
+                        id=id,
+                        vector= vector if is_2d_list(vector) else [vector],
+                        payload = payload
+                    )
+                ],
+            )
+            print("Upserted 01 face to local DB")
+            return True
+        except Exception as e:
+            print("Error upserting face to local DB: ", e)
+            return False
 
     def upsert_faces(self, points):
         try: 
@@ -116,9 +149,10 @@ class Faces:
     def add_vector(self, id, vector):
         try: 
             point = self.get_face(id)
-            vectors = commons._safe_get(point, "vectors") if point is not None else []
-            payload = commons._safe_get(point, "payload") if point is not None else {}
-            vectors.extend(vector)
+            vectors = commons._safe_get(point, "vector", default=[]) if point is not None else []
+            payload = commons._safe_get(point, "payload", default={}) if point is not None else {}
+            print(f"persion {id} had: {len(vectors)} vectors.")
+            vectors.append(vector)
             self.db.upsert(
                 collection_name=self.collection_name,
                 wait=True,
@@ -136,6 +170,15 @@ class Faces:
             logger.error("Error inserting vector to DB: %s", e)
         return False
 
+    def find(self, vector, score_threshold=0.7):
+        return self.db.query_points(
+            collection_name= self.collection_name, 
+            query=[vector],
+            with_vectors=True,
+            with_payload=True,
+            limit= 1,
+            score_threshold = score_threshold
+        )
 
 class RemoteFaces(Faces):
     def __init__(self):
@@ -165,6 +208,22 @@ class RemoteFaces(Faces):
                             comparator=models.MultiVectorComparator.MAX_SIM
                         )
                     ),
+                    # # TỐI ƯU RAM & TỐC ĐỘ: Bật Scalar Quantization (Nén về int8)
+                    # # Giúp giảm 4 lần dung lượng RAM lưu trữ vector nhưng giữ nguyên ~99% độ chính xác
+                    # quantization_config=QuantizationConfig(
+                    #     scalar=ScalarQuantization(
+                    #         type=ScalarType.INT8,
+                    #         quantile=0.99, # Giữ lại 99% phân phối dữ liệu để tránh mất mát độ chính xác
+                    #         always_ram=True # Giữ mảng nén trên RAM để tìm kiếm cực nhanh
+                    #     )
+                    # ),
+                    # TỐI ƯU ĐỘ CHÍNH XÁC (HNSW Index): 
+                    # Nhận diện khuôn mặt cần độ chính xác cao để tránh False Positive (nhận nhầm người)
+                    hnsw_config=HnswConfigDiff(
+                        m=32,            # Tăng số lượng liên kết giữa các node (Mặc định: 16)
+                        ef_construct=200, # Tăng độ chính xác lúc xây dựng index (Mặc định: 100)
+                        on_disk=False     # Giữ index trên RAM để có tốc độ phản hồi (Latency) thấp nhất
+                    )
                 )
             self.db = db
         except Exception as e:
@@ -177,15 +236,18 @@ class ClientFaces(Faces):
         self.reload()
         
     def reload(self):
-        self.close()
-        client_path = os.path.join("./vectordb","client") 
-        client = QdrantClient(path=client_path)
+        self.collection_name = settings.get("VECTORDB", "COLLECTION_NAME", fallback="hubt_faces")
+        self.vector_size = settings.getint("VECTORDB", "VECTOR_SIZE", fallback= 4096) 
+        if self.db is None:
+            client_path = os.path.join("./vectordb","client") 
+            client = QdrantClient(path=client_path)
+            self.db = client
         try:
-            client.get_collection(collection_name=self.collection_name)
+            self.db.get_collection(collection_name=self.collection_name)
             print("Client collection '{}' exists".format(self.collection_name))
         except Exception:
             print("Client collection '{}' not found, creating...".format(self.collection_name))
-            client.create_collection(
+            self.db.create_collection(
                 collection_name= self.collection_name,
                 vectors_config= VectorParams(
                     size=self.vector_size, 
@@ -194,8 +256,23 @@ class ClientFaces(Faces):
                         comparator=models.MultiVectorComparator.MAX_SIM
                     )
                 ),
+                # # TỐI ƯU RAM & TỐC ĐỘ: Bật Scalar Quantization (Nén về int8)
+                # # Giúp giảm 4 lần dung lượng RAM lưu trữ vector nhưng giữ nguyên ~99% độ chính xác
+                # quantization_config=QuantizationConfig(
+                #     scalar=ScalarQuantization(
+                #         type=ScalarType.INT8,
+                #         quantile=0.99, # Giữ lại 99% phân phối dữ liệu để tránh mất mát độ chính xác
+                #         always_ram=True # Giữ mảng nén trên RAM để tìm kiếm cực nhanh
+                #     )
+                # ),
+                # TỐI ƯU ĐỘ CHÍNH XÁC (HNSW Index): 
+                # Nhận diện khuôn mặt cần độ chính xác cao để tránh False Positive (nhận nhầm người)
+                hnsw_config=HnswConfigDiff(
+                    m=32,            # Tăng số lượng liên kết giữa các node (Mặc định: 16)
+                    ef_construct=200, # Tăng độ chính xác lúc xây dựng index (Mặc định: 100)
+                    on_disk=False     # Giữ index trên RAM để có tốc độ phản hồi (Latency) thấp nhất
+                )
             )
-        self.db = client
         return self
 
 
@@ -205,25 +282,26 @@ class ImportFaces(Faces):
         self.reload()
         
     def reload(self):
-        self.close()
-        client_path = os.path.join("./vectordb","import") 
-        client = QdrantClient(path=client_path)
+        self.collection_name = settings.get("VECTORDB", "COLLECTION_NAME", fallback="hubt_faces")
+        self.vector_size = settings.getint("VECTORDB", "VECTOR_SIZE", fallback= 4096) 
+        if self.db is None:
+            client_path = os.path.join("./vectordb","import") 
+            self.db = QdrantClient(path=client_path)
         try:
-            client.get_collection(collection_name=self.collection_name)
-            print("Client collection '{}' exists".format(self.collection_name))
+            self.db.get_collection(collection_name=self.collection_name)
+            print("Client Import collection '{}' exists".format(self.collection_name))
         except Exception:
-            print("Client collection '{}' not found, creating...".format(self.collection_name))
-            client.create_collection(
+            print("Client Import collection '{}' not found, creating...".format(self.collection_name))
+            self.db.create_collection(
                 collection_name= self.collection_name,
                 vectors_config= VectorParams(
                     size=self.vector_size, 
                     distance=Distance.COSINE,
-                    # multivector_config=models.MultiVectorConfig(
-                    #     comparator=models.MultiVectorComparator.MAX_SIM
-                    # )
+                    multivector_config=models.MultiVectorConfig(
+                        comparator=models.MultiVectorComparator.MAX_SIM
+                    )
                 ),
             )
-        self.db = client
         return self
     
     def upsert_face(self, id, vector, payload = {}):
@@ -236,113 +314,39 @@ class ImportFaces(Faces):
         return self
     
 class DbProvider:
-    def __init__(self):
-        self.host = None
+    def __init__(self): 
         self.client:ClientFaces = ClientFaces()
         self.import_client:ImportFaces = ImportFaces()
         self.db:RemoteFaces = RemoteFaces()
     
-    def close(self):
-        self.host = settings.get("VECTORDB","HOST", fallback= "localhost")
-        self.port = settings.getint("VECTORDB","PORT", fallback= 6333)
-        self.collection_name = settings.get("VECTORDB", "COLLECTION_NAME", fallback="hubt_faces")
-        self.vector_size = settings.getint("VECTORDB", "VECTOR_SIZE", fallback= 4096) 
+    def close(self): 
         if self.db is not None:
             self.db.close()
-            self.db = None
         if self.client is not None:
             self.client.close()
-            self.client = None
         if self.import_client is not None:
             self.import_client.close()
-            self.import_client = None
         return self
     
-    def reload_db(self, clear_client=False):
+    def reload(self, clear_client=False):
+        # Close existing DB connection if any
+        if clear_client:
+            self.client.clear()
+        self.close() 
         self.host = settings.get("VECTORDB","HOST", fallback= "localhost")
         self.port = settings.getint("VECTORDB","PORT", fallback= 6333)
         self.collection_name = settings.get("VECTORDB", "COLLECTION_NAME", fallback="hubt_faces")
-        self.vector_size = settings.getint("VECTORDB", "VECTOR_SIZE", fallback= 4096) 
-        # Close existing DB connection if any
-        self.close_db() 
-        if clear_client:
-            self.clear_client()
+        self.vector_size = settings.getint("VECTORDB", "VECTOR_SIZE", fallback= 4096)
+        self.db.reload()
+        self.client.reload()
+        self.import_client.reload()
         return self
     
-    def get_client(self, key="collection"):
-        if self.host is None:
-            self.reload_db()
-            
-        if self.client is None:
-            client_path = os.path.join("./vectordb","client") 
-            self.client = QdrantClient(path=client_path)
-            try:
-                self.client.get_collection(collection_name=self.collection_name)
-                print("Client collection '{}' exists".format(self.collection_name))
-            except Exception:
-                print("Client collection '{}' not found, creating...".format(self.collection_name))
-                self.client.create_collection(
-                    collection_name= self.collection_name,
-                    vectors_config= VectorParams(
-                        size=self.vector_size, 
-                        distance=Distance.COSINE,
-                        # multivector_config=models.MultiVectorConfig(
-                        #     comparator=models.MultiVectorComparator.MAX_SIM
-                        # )
-                    ),
-                )
-            return self.client
+    def get_client(self):
         return self.client
     
-    def clear_client(self):
-        client = self.get_client()
-        try:
-            client.delete_collection(collection_name=self.collection_name)
-            print("Local collection '{}' cleared".format(self.collection_name))
-        except Exception as e:
-            print("Error clearing local DB: ", e)
-        self.client = None
-        
-    def get_all_faces_client(self):
-        client = self.get_client()
-        if client is None:
-            return []
-        points, _ = client.scroll(
-            collection_name=self.collection_name,
-            offset=0,
-            limit=10000,
-            with_payload=True,
-            with_vectors=True,
-        )
-        return points
-
     def get_db(self):
-        try: 
-            if self.host is None:
-                self.reload_db()
-                
-            if self.db is None: 
-                self.db = QdrantClient(self.host, port=self.port)
-            # Ensure remote collection exists; create it if missing
-            try:
-                self.db.get_collection(collection_name=self.collection_name)
-                print("Remote collection '{}' exists".format(self.collection_name))
-            except Exception:
-                print("Remote collection '{}' not found, creating...".format(self.collection_name))
-                self.db.create_collection(
-                    collection_name= self.collection_name,
-                    vectors_config= VectorParams(
-                        size=self.vector_size, 
-                        distance=Distance.COSINE,
-                        # multivector_config=models.MultiVectorConfig(
-                        #     comparator=models.MultiVectorComparator.MAX_SIM
-                        # )
-                    ),
-                )
-            return self.db
-        except Exception as e:
-            print("Error connecting to DB: ", e)
-            return None
+        return self.db
 
     def get_points_count_client(self):
         client = self.get_client()
@@ -367,8 +371,8 @@ class DbProvider:
             kwargs:
                 filter_list: list of values to filter by, default is ["undefined", "TH14.01"]
         """
-        db = self.get_db()
-        client = self.get_client()
+        db = self.get_db().db
+        client = self.get_client().db
         offset = 0
         total = 0
         
@@ -395,7 +399,7 @@ class DbProvider:
                     with_payload=True,
                     with_vectors=True,
                 )
-                n
+                
                 client.upsert(
                     collection_name=self.collection_name,
                     wait=True,
@@ -410,73 +414,4 @@ class DbProvider:
 
         return total
     
-    def update_face_client(self, face_id, payload):
-        client = self.get_client()
-        if client is None:
-            return False
-        try:
-            existing_point = client.get(
-                collection_name=self.collection_name,
-                id=face_id,
-                with_payload=True,
-                with_vector=False,
-            )
-            if existing_point is not None:
-                updated_point = PointStruct(
-                    id=face_id,
-                    payload=payload,
-                    vector=existing_point.vector
-                )
-                client.upsert(
-                    collection_name=self.collection_name,
-                    wait=True,
-                    points=[updated_point]
-                )
-                print("Updated face {} in local DB".format(face_id))
-                return True
-            else:
-                print("Face ID {} not found in local DB".format(face_id))
-                return False
-        except Exception as e:
-            print("Error updating face in local DB: ", e)
-            return False
-        
-    def upsert_face_db(self, points):
-        db = self.get_db()
-        if db is None:
-            return False
-        try: 
-            db.upsert(
-                collection_name=self.collection_name,
-                wait=True,
-                points=points
-            )
-            print("Upserted faces to remote DB")
-            return True
-        except Exception as e:
-            print("Error upserting face to remote DB: ", e)
-            return False
-        
-    def upsert_face_client(self, id, vector, payload):
-        client = self.get_client()
-        if client is None:
-            return False
-        try: 
-            client.upsert(
-                collection_name=self.collection_name,
-                wait=True,
-                points=[
-                    PointStruct(
-                        id=id,
-                        vector=vector,
-                        payload=payload
-                    )
-                ]
-            )
-            print("Upserted face to local DB")
-            return True
-        except Exception as e:
-            print("Error upserting face to local DB: ", e)
-            return False
-        
 db : DbProvider = DbProvider()
