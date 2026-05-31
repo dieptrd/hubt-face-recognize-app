@@ -126,7 +126,9 @@ class CameraWidget(QtWidgets.QWidget):
                     # Read next frame from stream and insert into deque
                     if self.capture.isOpened():
                         status, frame = self.capture.read()
-                        if status:
+                        if status: 
+                            # flip horizontally (mirror) if user wants selfie-view
+                            frame = cv2.flip(frame, 1)
                             self.deque.append(frame)
                     else:
                         self.capture.release()
@@ -330,9 +332,6 @@ class CameraWidget(QtWidgets.QWidget):
         return ""
 
     def set_frame(self):
-        if getattr(self, "frame_display_progress", False):
-            return
-        self.frame_display_progress = True
         """Sets pixmap image to video frame"""
         if not self.online:
             def create_connecting_image(width, height):
@@ -351,7 +350,6 @@ class CameraWidget(QtWidgets.QWidget):
             pix = QtGui.QPixmap.fromImage(img)
             self.video_frame.setPixmap(pix)
             commons.spin(1)
-            self.frame_display_progress = False
             return
 
         face = self.last_face[-1] if len(self.last_face) > 0 else None
@@ -407,8 +405,6 @@ class CameraWidget(QtWidgets.QWidget):
 
         if face is not None and seq_id != self.showing_face_seq:
             self.showing_face_seq = seq_id
-            
-        self.frame_display_progress = False
     
     def get_video_frame(self):
         return self.video_frame
